@@ -1,0 +1,11 @@
+{
+  "uuid": "qmk-layer-indicator@local",
+  "name": "QMK Layer Indicator",
+  "description": "Shows current QMK keyboard layer in the top bar",
+  "shell-version": [
+    "45",
+    "46"
+  ],
+  "url": "https://github.com/yourusername/qmk-layer-indicator",
+  "version": 1
+}
