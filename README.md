@@ -18,17 +18,34 @@ Collection of tools for QMK keyboards, including a real-time keyboard overlay GU
 
 ## Installation
 
+### System Requirements
+
+- Linux with X11 or Wayland
+- GNOME Shell (optional, for top bar integration)
+- Python 3.7+
+- USB access (requires root or udev rules)
+
 ### Dependencies
 
-Install required system packages:
+Install all required system packages:
+
 ```bash
-sudo apt install python3-pyqt5 python3-usb python3-hid python3-dbus
+sudo apt install python3-pyqt5 python3-usb python3-hid python3-dbus python3-xlib
 ```
 
-Or using pip:
+**Package descriptions:**
+- `python3-pyqt5` - GUI framework for overlay window
+- `python3-usb` - USB device communication
+- `python3-hid` - HID device interface
+- `python3-dbus` - D-Bus communication for GNOME integration
+- `python3-xlib` - X11 window management (click-through, always-on-top)
+
+**Alternative installation with pip:**
 ```bash
-pip3 install PyQt5 pyusb hidapi
+pip3 install PyQt5 pyusb hidapi python-dbus python-xlib
 ```
+
+**Note:** Without `python3-xlib`, the overlay will still work but click-through and always-on-top features will be disabled.
 
 ### GNOME Shell Extension
 
