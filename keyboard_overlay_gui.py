@@ -883,15 +883,25 @@ class KeyboardMonitor(threading.Thread):
         # Split keyboard configuration
         self.rows_per_half = rows // 2
 
-        # Interactive mode trigger key (left half, row 4, col 3)
-        self.interactive_key_row = 4
-        self.interactive_key_col = 3
+        # Trigger keys on bottom row (last row of each half)
+        # For crkbd (4 rows): row 3
+        # For Sofle (5 rows): row 4
+        bottom_row = self.rows_per_half - 1
+
+        # Trigger key column depends on keyboard layout
+        # Crkbd: column 4 (natural thumb resting position without rotary encoder)
+        # Sofle: column 3 (natural thumb resting position)
+        trigger_col = 4 if keyboard.keyboard_name == "Crkbd" else 3
+
+        # Interactive mode trigger key (left half, bottom row)
+        self.interactive_key_row = bottom_row
+        self.interactive_key_col = trigger_col
         self.interactive_key_layer = 5
         self.interactive_key_pressed = False  # Track if interactive key is currently pressed
 
-        # On-top mode trigger key (right half, row 4, col 3)
-        self.on_top_key_row = 4 + self.rows_per_half
-        self.on_top_key_col = 3
+        # On-top mode trigger key (right half, bottom row)
+        self.on_top_key_row = bottom_row + self.rows_per_half
+        self.on_top_key_col = trigger_col
         self.on_top_key_layer = 4
         self.on_top_key_pressed = False  # Track if on-top key is currently pressed
 
@@ -1110,8 +1120,8 @@ def main():
     keyboard_monitor.start()
 
     print("\nOverlay window active!")
-    print("- Press L[4,3] on layer 5 to make window interactive (drag to move)")
-    print("- Press R[4,3] on layer 4 to bring window to top for 10 seconds")
+    print(f"- Press L[{keyboard_monitor.interactive_key_row},{keyboard_monitor.interactive_key_col}] on layer {keyboard_monitor.interactive_key_layer} to make window interactive (drag to move)")
+    print(f"- Press R[{keyboard_monitor.on_top_key_row - keyboard_monitor.rows_per_half},{keyboard_monitor.on_top_key_col}] on layer {keyboard_monitor.on_top_key_layer} to bring window to top for 10 seconds")
     print("- Press Ctrl+C to exit")
     print()
 
