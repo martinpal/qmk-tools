@@ -63,6 +63,11 @@ class OnTopSignal(QObject):
     on_top_changed = pyqtSignal(bool)  # on-top state
 
 
+class ReconnectSignal(QObject):
+    """Signal emitter for keyboard reconnection"""
+    reconnected = pyqtSignal()  # keyboard reconnected
+
+
 class GnomeIndicatorBridge:
     """Bridge to update GNOME Shell extension via D-Bus or Unix socket"""
 
@@ -183,6 +188,7 @@ class KeyboardOverlay(QWidget):
         self.key_labels = []
         self.drag_position = None
         self.on_top_timer = None  # Timer for auto-return to bottom
+        self.reloading_layers = False  # Flag to prevent updates during layer reload
 
         # Thread communication
         self.update_signal = LayerUpdateSignal()
@@ -448,10 +454,12 @@ class KeyboardOverlay(QWidget):
         if is_transparent and key_idx >= 0 and self.current_layer > 0:
             # Look down through layers until we find a non-transparent key
             for layer in range(self.current_layer - 1, -1, -1):
-                lower_keycode = self.all_layers[layer][key_idx]
-                if lower_keycode != 0x0001:  # Not transparent
-                    display_keycode = lower_keycode
-                    break
+                # Check if layers are loaded and layer exists
+                if layer < len(self.all_layers) and key_idx < len(self.all_layers[layer]):
+                    lower_keycode = self.all_layers[layer][key_idx]
+                    if lower_keycode != 0x0001:  # Not transparent
+                        display_keycode = lower_keycode
+                        break
 
         key_name = self.keyboard.keycode_to_name(display_keycode)
 
@@ -693,6 +701,10 @@ class KeyboardOverlay(QWidget):
 
     def on_layer_changed(self, layer_num: int, layer_stack: dict, default_layer: int):
         """Called when layer changes (from USB monitoring thread)"""
+        # Skip updates if we're reloading layers
+        if self.reloading_layers:
+            return
+
         self.current_layer = layer_num
         self.active_layer_stack = layer_stack
         self.default_layer = default_layer
@@ -729,7 +741,11 @@ class KeyboardOverlay(QWidget):
 
     def load_layers(self):
         """Load all layers from keyboard"""
+        self.reloading_layers = True  # Pause layer updates during reload
         print("Loading keyboard layers...")
+
+        # Clear existing layers
+        self.all_layers = []
 
         total_keys = self.rows * self.cols * self.keyboard.layer_count
         total_bytes = total_keys * 2
@@ -754,6 +770,14 @@ class KeyboardOverlay(QWidget):
 
             offset += chunk_size
 
+        # Verify we got all the data
+        if len(keymap_data) < total_bytes:
+            print(f"Warning: Only received {len(keymap_data)} of {total_bytes} bytes - aborting layer load")
+            # Don't proceed with partial data - it will cause issues
+            self.all_layers = []
+            self.reloading_layers = False
+            return
+
         # Parse keycodes
         keycodes = []
         for i in range(0, len(keymap_data), 2):
@@ -775,6 +799,18 @@ class KeyboardOverlay(QWidget):
         # Initial display
         self.update_header()
         self.create_keyboard_grid()
+
+        self.reloading_layers = False  # Resume layer updates
+
+    def on_keyboard_reconnected(self):
+        """Called when keyboard is reconnected - reload layers in main thread"""
+        print("Reloading keyboard layers after reconnection...")
+        self.load_layers()
+
+        if self.all_layers and len(self.all_layers) == self.keyboard.layer_count:
+            print("Layer reload successful")
+        else:
+            print(f"Warning: Layer reload incomplete ({len(self.all_layers)} of {self.keyboard.layer_count} layers)")
 
     def mousePressEvent(self, event):
         """Handle mouse press for dragging window"""
@@ -865,6 +901,17 @@ class KeyboardMonitor(threading.Thread):
         self.error_count = 0
         self.max_errors = 10  # Reconnect after 10 consecutive errors
 
+        # Store keyboard identification for reconnection
+        self.keyboard_vid = keyboard.device.idVendor
+        self.keyboard_pid = keyboard.device.idProduct
+        self.keyboard_name = keyboard.keyboard_name
+        # Store bus and port numbers - these should remain stable across reconnects
+        self.keyboard_bus = keyboard.device.bus
+        try:
+            self.keyboard_port_numbers = tuple(keyboard.device.port_numbers) if hasattr(keyboard.device, 'port_numbers') else None
+        except:
+            self.keyboard_port_numbers = None
+
         # Create signal for thread-safe interactive mode communication
         self.interactive_signal = InteractiveSignal()
         self.interactive_signal.interactive_changed.connect(overlay.set_interactive)
@@ -872,6 +919,10 @@ class KeyboardMonitor(threading.Thread):
         # Create signal for thread-safe on-top mode communication
         self.on_top_signal = OnTopSignal()
         self.on_top_signal.on_top_changed.connect(overlay.set_window_on_top)
+
+        # Create signal for thread-safe keyboard reconnection
+        self.reconnect_signal = ReconnectSignal()
+        self.reconnect_signal.reconnected.connect(overlay.on_keyboard_reconnected)
 
         # Layer state tracking
         self.current_layer = 0
@@ -905,6 +956,111 @@ class KeyboardMonitor(threading.Thread):
         self.on_top_key_layer = 4
         self.on_top_key_pressed = False  # Track if on-top key is currently pressed
 
+    def reconnect_keyboard(self) -> bool:
+        """Attempt to reconnect to the same keyboard after disconnection"""
+        print(f"Attempting to reconnect to {self.keyboard_name} (VID:PID {self.keyboard_vid:04X}:{self.keyboard_pid:04X})...")
+
+        # Close old keyboard handle
+        try:
+            self.keyboard.close()
+        except Exception as e:
+            print(f"Error closing old keyboard: {e}")
+
+        # Scan for keyboards
+        devices = via.find_via_keyboards(verbose=False)
+        if not devices:
+            print("No VIA-capable keyboards found")
+            return False
+
+        # Find matching keyboard by VID/PID, bus, and port numbers
+        matching = []
+        for d in devices:
+            if d.idVendor != self.keyboard_vid or d.idProduct != self.keyboard_pid:
+                continue
+
+            # Match by bus number
+            if d.bus != self.keyboard_bus:
+                continue
+
+            # If we have port numbers, also match by port numbers
+            if self.keyboard_port_numbers:
+                try:
+                    device_ports = tuple(d.port_numbers) if hasattr(d, 'port_numbers') else None
+                    if device_ports == self.keyboard_port_numbers:
+                        matching.append(d)
+                        break  # Found our specific keyboard
+                except:
+                    pass
+            else:
+                # No port numbers, but bus matches
+                matching.append(d)
+                break
+
+        if not matching:
+            if self.keyboard_port_numbers:
+                print(f"Keyboard {self.keyboard_name} on bus {self.keyboard_bus} ports {self.keyboard_port_numbers} not found")
+            else:
+                print(f"Keyboard {self.keyboard_name} on bus {self.keyboard_bus} not found")
+            return False
+
+        # Open the keyboard
+        device = matching[0]
+        new_keyboard = via.ViaKeyboard(device)
+        if not new_keyboard.open():
+            print("Failed to open keyboard")
+            return False
+
+        # Detect keyboard type and query info
+        new_keyboard.detect_keyboard_type()
+        new_keyboard.query_info()
+
+        # Verify matrix size was detected
+        if not new_keyboard.matrix_rows or not new_keyboard.matrix_cols:
+            print(f"Failed to detect keyboard matrix size")
+            new_keyboard.close()
+            return False
+
+        # Verify it's the same keyboard
+        if new_keyboard.matrix_rows != self.rows or new_keyboard.matrix_cols != self.cols:
+            print(f"Warning: Matrix size changed from {self.rows}x{self.cols} to {new_keyboard.matrix_rows}x{new_keyboard.matrix_cols}")
+            new_keyboard.close()
+            return False
+
+        # Success! Replace keyboard handle
+        self.keyboard = new_keyboard
+        self.overlay.keyboard = new_keyboard
+        print(f"✓ Successfully reconnected to {self.keyboard_name}")
+
+        # Reset layer state
+        self.current_layer = 0
+        self.default_layer = 0
+        self.active_layer_stack = {}
+        self.pressed_keys = {}
+
+        # Pause monitoring while reloading layers to avoid USB command conflicts
+        self.error_count = self.max_errors + 1
+
+        # Signal the overlay to reload layers (thread-safe)
+        self.reconnect_signal.reconnected.emit()
+
+        # Wait for load_layers() to start and complete
+        # Check the flag has been set to True (load started) then back to False (load done)
+        timeout = 100  # 10 seconds max
+        started = False
+        while timeout > 0:
+            if self.overlay.reloading_layers:
+                started = True
+            elif started and not self.overlay.reloading_layers:
+                # Load has completed
+                break
+            time.sleep(0.1)
+            timeout -= 1
+
+        # Resume monitoring
+        self.error_count = 0
+
+        return True
+
     def run(self):
         """Monitor keyboard matrix for layer changes"""
         print("Keyboard monitor started")
@@ -916,9 +1072,18 @@ class KeyboardMonitor(threading.Thread):
                 if matrix_data is None:
                     self.error_count += 1
                     if self.error_count >= self.max_errors:
-                        print("Too many USB errors, device may be disconnected. Waiting for reconnection...")
-                        time.sleep(5)
-                        self.error_count = 0
+                        print("Too many USB errors, device may be disconnected. Attempting reconnection...")
+
+                        # Keep trying to reconnect every 1 second
+                        while self.running:
+                            if self.reconnect_keyboard():
+                                # Reconnection successful, reset error count and continue
+                                self.error_count = 0
+                                print("Resuming keyboard monitoring...")
+                                break
+                            else:
+                                # Reconnection failed, wait 1 second and retry
+                                time.sleep(1)
                     time.sleep(0.02)
                     continue
 
@@ -959,8 +1124,13 @@ class KeyboardMonitor(threading.Thread):
 
                             if pressed:
                                 # Key pressed - check current layer
-                                keycode = self.overlay.all_layers[self.current_layer][key_idx]
-                                self.pressed_keys[(row, col)] = keycode
+                                # Bounds check for layer data (may be reloading after reconnection)
+                                if (self.current_layer < len(self.overlay.all_layers) and
+                                    key_idx < len(self.overlay.all_layers[self.current_layer])):
+                                    keycode = self.overlay.all_layers[self.current_layer][key_idx]
+                                    self.pressed_keys[(row, col)] = keycode
+                                else:
+                                    keycode = 0x0000  # No-op if layers aren't loaded yet
                             else:
                                 # Key released - use remembered keycode
                                 keycode = self.pressed_keys.get((row, col), 0x0000)
