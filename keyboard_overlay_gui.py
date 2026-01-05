@@ -463,6 +463,9 @@ class KeyboardOverlay(QWidget):
 
         key_name = self.keyboard.keycode_to_name(display_keycode)
 
+        # Check if this is a simple modifier key (LCTL(KC_A), etc - range 0x0100-0x1FFF)
+        is_simple_mod = 0x0100 <= display_keycode <= 0x1FFF
+
         # Check if this is a Mod-Tap key
         is_mod_tap = 0x2000 <= display_keycode <= 0x3FFF
         mt_mod_color = None
@@ -494,6 +497,41 @@ class KeyboardOverlay(QWidget):
                 0x00DC: 'W→',     # MS_WH_RIGHT (wheel right)
             }
             key_name = mouse_keys.get(display_keycode, f'MS_{display_keycode:02X}')
+        elif is_simple_mod:
+            # Simple modifier keys like LCTL(KC_A) - range 0x0100-0x1FFF
+            # Format: 0x0M00 | keycode where M is modifier bits
+            mods = (display_keycode >> 8) & 0x1F
+            kc = display_keycode & 0xFF
+
+            # Get the base key name
+            base_key = self.keyboard.keycode_to_name(kc)
+            if base_key.startswith("KC_"):
+                base_key = base_key[3:]
+
+            # Convert to single character if possible
+            char_map = {
+                'A': 'A', 'B': 'B', 'C': 'C', 'D': 'D', 'E': 'E', 'F': 'F', 'G': 'G',
+                'H': 'H', 'I': 'I', 'J': 'J', 'K': 'K', 'L': 'L', 'M': 'M', 'N': 'N',
+                'O': 'O', 'P': 'P', 'Q': 'Q', 'R': 'R', 'S': 'S', 'T': 'T', 'U': 'U',
+                'V': 'V', 'W': 'W', 'X': 'X', 'Y': 'Y', 'Z': 'Z',
+                'LBRC': '[', 'RBRC': ']', 'SCLN': ';', 'SLSH': '/',
+                'QUOT': "'", 'GRV': '`', 'COMM': ',', 'DOT': '.',
+                'MINS': '-', 'EQL': '=', 'BSLS': '\\',
+            }
+            base_key = char_map.get(base_key, base_key)
+
+            # Build modifier prefix
+            prefix = ''
+            if mods & 0x01:  # LCTL
+                prefix += '⌃'
+            if mods & 0x02:  # LSFT
+                prefix += '⇧'
+            if mods & 0x04:  # LALT
+                prefix += '⌥'
+            if mods & 0x08:  # LGUI
+                prefix += '⌘'
+
+            key_name = f"{prefix}{base_key}"
         elif is_qmk_shifted:
             # These are special QMK shifted keys
             mt_mod_color = QColor(20, 80, 20)  # Even darker green like LSFT
