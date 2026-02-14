@@ -47,6 +47,14 @@ except ImportError:
 # Import our USB keyboard interface
 import list_via_keyboards_usb as via
 
+# Import boblight client (optional)
+try:
+    import boblight_client
+    BOBLIGHT_AVAILABLE = True
+except ImportError:
+    BOBLIGHT_AVAILABLE = False
+    print("Warning: boblight_client not available. Boblight integration disabled.")
+
 
 class LayerUpdateSignal(QObject):
     """Signal emitter for thread-safe GUI updates"""
@@ -183,12 +191,28 @@ class KeyboardOverlay(QWidget):
             "MAGENTA": QColor(255, 0, 255),
         }
 
+        # Boblight colors - fully saturated for LED display
+        self.boblight_colors = {
+            "WHITE": QColor(120, 120, 120),
+            "CYAN": QColor(0, 255, 255),
+            "RED": QColor(255, 0, 0),        # Pure red
+            "BLUE": QColor(0, 0, 255),       # Pure blue instead of light blue
+            "GREEN": QColor(0, 255, 0),      # Pure green
+            "ORANGE": QColor(255, 128, 0),   # Bright orange
+            "MAGENTA": QColor(255, 0, 255),
+        }
+
         # GUI state
         self.interactive_mode = False
         self.key_labels = []
         self.drag_position = None
         self.on_top_timer = None  # Timer for auto-return to bottom
         self.reloading_layers = False  # Flag to prevent updates during layer reload
+
+        # Boblight integration (set later by main)
+        self.boblight = None
+        self.boblight_refresh_timer = None
+        self.boblight_current_color = None
 
         # Thread communication
         self.update_signal = LayerUpdateSignal()
@@ -757,6 +781,61 @@ class KeyboardOverlay(QWidget):
             layer_color_hex = self._qcolor_to_hex(self.qt_colors[layer_color_name])
             self.gnome_bridge.update_layer(layer_name, layer_color_hex)
 
+        # Update boblight if available
+        # Strategy: Stay connected, toggle priority between 100 (active) and 255 (disabled)
+        if hasattr(self, 'boblight') and self.boblight:
+            print(f"[BOBLIGHT] Layer changed to {layer_num}")
+
+            # Ensure connected (should be from startup)
+            if not self.boblight.connected:
+                print(f"[BOBLIGHT] Not connected, connecting...")
+                if not self.boblight.connect():
+                    print(f"[BOBLIGHT] Failed to connect")
+                    return
+
+            # Stop any existing refresh timer
+            if self.boblight_refresh_timer:
+                self.boblight_refresh_timer.stop()
+                self.boblight_refresh_timer = None
+
+            if layer_num == 0:
+                # Base layer - set priority to 255 (disabled) to let boblight-X11 win
+                print(f"[BOBLIGHT] Setting priority to 255 (disabled) for base layer")
+                self.boblight.set_priority(255)
+                self.boblight_current_color = None
+            else:
+                # Non-base layers - set priority to 100 (active) to override boblight-X11
+                print(f"[BOBLIGHT] Setting priority to 100 (active) for layer {layer_num}")
+                self.boblight.set_priority(100)
+
+                # Set layer-specific vibrant color
+                layer_color_name = self.layer_info.get(layer_num, {}).get("color", "WHITE")
+                color = self.boblight_colors.get(layer_color_name, QColor(255, 255, 255))
+                print(f"[BOBLIGHT] Setting color {layer_color_name}: RGB({color.red()}, {color.green()}, {color.blue()})")
+
+                # Store current color for refresh timer
+                self.boblight_current_color = color
+
+                # Send color immediately
+                success = self.boblight.set_color_from_qcolor(color)
+                print(f"[BOBLIGHT] Set color result: {success}")
+
+                if success:
+                    # Start refresh timer to keep overriding boblight-X11
+                    # Device interval is 50ms (20Hz), boblight-X11 updates at 50ms (20Hz)
+                    # We refresh at 25ms (40Hz) - 2x device rate to ensure we always dominate
+                    self.boblight_refresh_timer = QTimer()
+                    self.boblight_refresh_timer.timeout.connect(self.refresh_boblight_color)
+                    self.boblight_refresh_timer.start(25)  # 25ms = 40Hz, 2x device interval
+                    print(f"[BOBLIGHT] Started refresh timer (25ms = 40Hz)")
+        else:
+            print(f"[BOBLIGHT] Boblight not available")
+
+    def refresh_boblight_color(self):
+        """Periodically refresh boblight color to override boblight-X11"""
+        if hasattr(self, 'boblight') and self.boblight and self.boblight_current_color:
+            self.boblight.set_color_from_qcolor(self.boblight_current_color)
+
     def set_interactive(self, interactive: bool):
         """Toggle interactive mode"""
         if self.interactive_mode == interactive:
@@ -1231,6 +1310,14 @@ def main():
     parser.add_argument('--keyboard', type=str, help='Keyboard selection: INDEX or VID:PID (e.g., 1 or FEED:6060)')
     parser.add_argument('--x', type=int, default=0, help='X position of window (default: 0)')
     parser.add_argument('--y', type=int, default=0, help='Y position of window (default: 0)')
+
+    # Boblight integration arguments
+    parser.add_argument('--boblight', action='store_true', help='Enable boblight integration')
+    parser.add_argument('--boblight-host', type=str, default='localhost', help='Boblight server host (default: localhost)')
+    parser.add_argument('--boblight-port', type=int, default=19333, help='Boblight server port (default: 19333)')
+    parser.add_argument('--boblight-priority', type=int, default=100, help='Boblight priority (default: 100, LOWER = higher priority, 255 = disabled, boblight-X11 uses 128)')
+    parser.add_argument('--boblight-leds', type=str, help='Comma-separated LED indices to control (e.g., "0,1,2,3,4,5"), omit for all LEDs')
+
     args = parser.parse_args()
 
     # Parse keyboard selection
@@ -1245,6 +1332,15 @@ def main():
             selected_keyboard_pid = int(pid_str, 16)
         else:
             selected_keyboard_index = int(args.keyboard)
+
+    # Parse boblight LED indices
+    boblight_led_indices = None
+    if args.boblight_leds:
+        try:
+            boblight_led_indices = [int(x.strip()) for x in args.boblight_leds.split(',')]
+        except ValueError:
+            print(f"Error: Invalid LED indices format: {args.boblight_leds}")
+            return 1
 
     print("QMK Keyboard Overlay GUI")
     print("=" * 70)
@@ -1319,6 +1415,29 @@ def main():
     # Setup GNOME Shell indicator bridge if available
     gnome_bridge = GnomeIndicatorBridge()
     overlay.gnome_bridge = gnome_bridge
+
+    # Setup boblight integration if enabled
+    boblight = None
+    if args.boblight:
+        if not BOBLIGHT_AVAILABLE:
+            print("Error: Boblight integration requested but boblight_client module not available")
+            return 1
+
+        print(f"\n[BOBLIGHT] Initializing boblight integration...")
+        boblight = boblight_client.BoblightClient(
+            host=args.boblight_host,
+            port=args.boblight_port,
+            priority=args.boblight_priority,
+            led_indices=boblight_led_indices
+        )
+
+        if boblight.connect():
+            overlay.boblight = boblight
+            print("[BOBLIGHT] Integration enabled")
+        else:
+            print("[BOBLIGHT] Warning: Failed to connect to boblight server, continuing without boblight")
+            boblight = None
+    overlay.boblight = boblight
 
     # Load keyboard layers
     overlay.load_layers()

@@ -10,6 +10,7 @@ Collection of tools for QMK keyboards, including a real-time keyboard overlay GU
 - **Always-on-top window** - Stays visible while typing (10-second timer after losing focus)
 - **Click-through transparent window** - Doesn't interfere with your workflow
 - **GNOME Shell integration** - Layer indicator in the top bar
+- **Boblight integration** - Ambient LED lighting feedback based on keyboard layer (optional)
 - **Corsair mouse monitor** - Tracks mouse battery and DPI changes
 
 ### Supported Keyboards
@@ -96,6 +97,24 @@ sudo DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
      DISPLAY="$DISPLAY" \
      python3 keyboard_overlay_gui.py
 ```
+
+### Boblight Integration (Optional)
+
+Enable ambient LED lighting that changes color based on your keyboard layer:
+
+```bash
+./run_overlay_with_sudo.sh  # Edit script to add --boblight arguments
+# OR
+sudo python3 keyboard_overlay_gui.py --boblight --boblight-leds "0,1,2,3,4,5"
+```
+
+**Features:**
+- Base layer (0) doesn't affect boblight - leaves control to boblight-X11
+- Other layers set LEDs to layer-specific colors
+- Configurable LED selection (e.g., top edge only)
+- Automatic reconnection if boblightd restarts
+
+See [BOBLIGHT_INTEGRATION.md](BOBLIGHT_INTEGRATION.md) for detailed configuration and usage.
 
 ## Components
 
