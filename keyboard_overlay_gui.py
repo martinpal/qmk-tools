@@ -819,8 +819,16 @@ class KeyboardOverlay(QWidget):
                 # Store current color for refresh timer
                 self.boblight_current_color = color
 
-                # Send color immediately
-                success = self.boblight.set_color_from_qcolor(color)
+                # Send color immediately (with Hue brightness scaling)
+                send_color = color
+                if hasattr(self, 'hue_client') and self.hue_client:
+                    scale = self.hue_client.brightness_scale
+                    send_color = QColor(
+                        int(color.red() * scale),
+                        int(color.green() * scale),
+                        int(color.blue() * scale)
+                    )
+                success = self.boblight.set_color_from_qcolor(send_color)
                 print(f"[BOBLIGHT] Set color result: {success}")
 
                 if success:
