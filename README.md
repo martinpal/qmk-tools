@@ -11,6 +11,7 @@ Collection of tools for QMK keyboards, including a real-time keyboard overlay GU
 - **Click-through transparent window** - Doesn't interfere with your workflow
 - **GNOME Shell integration** - Layer indicator in the top bar
 - **Boblight integration** - Ambient LED lighting feedback based on keyboard layer (optional)
+- **Hue bridge integration** - Dynamic LED brightness scaling based on Philips Hue light (optional)
 - **Corsair mouse monitor** - Tracks mouse battery and DPI changes
 
 ### Supported Keyboards
@@ -28,7 +29,22 @@ Collection of tools for QMK keyboards, including a real-time keyboard overlay GU
 
 ### Dependencies
 
-Install all required system packages:
+**Python virtual environment (recommended):**
+
+The `run_overlay_with_sudo.sh` script automatically creates and manages a Python virtual environment. You only need to install the venv package:
+
+```bash
+sudo apt install python3-venv
+```
+
+On first run, the script will automatically:
+1. Create a `venv/` directory as your user (not root)
+2. Install all dependencies from `requirements.txt`
+3. Use the venv's Python for all subsequent runs
+
+**System packages (alternative approach):**
+
+If you prefer system-wide installation instead of venv:
 
 ```bash
 sudo apt install python3-pyqt5 python3-usb python3-hid python3-dbus python3-xlib
@@ -41,9 +57,17 @@ sudo apt install python3-pyqt5 python3-usb python3-hid python3-dbus python3-xlib
 - `python3-dbus` - D-Bus communication for GNOME integration
 - `python3-xlib` - X11 window management (click-through, always-on-top)
 
-**Alternative installation with pip:**
+**For Hue bridge integration (optional):**
+
+With venv (automatic via script):
 ```bash
-pip3 install PyQt5 pyusb hidapi python-dbus python-xlib
+# Already included in requirements.txt - installed automatically
+./run_overlay_with_sudo.sh
+```
+
+Without venv (manual installation):
+```bash
+pip3 install phue requests
 ```
 
 **Note:** Without `python3-xlib`, the overlay will still work but click-through and always-on-top features will be disabled.
@@ -115,6 +139,71 @@ sudo python3 keyboard_overlay_gui.py --boblight --boblight-leds "0,1,2,3,4,5"
 - Automatic reconnection if boblightd restarts
 
 See [BOBLIGHT_INTEGRATION.md](BOBLIGHT_INTEGRATION.md) for detailed configuration and usage.
+
+### Hue Bridge Integration (Optional)
+
+Dynamically scale boblight LED brightness based on Philips Hue light brightness **and** solar elevation (time of day):
+
+```bash
+sudo python3 keyboard_overlay_gui.py --boblight --hue
+```
+
+**How it works:**
+- Uses **max(Hue brightness, solar brightness)** - whichever is brighter wins
+- **Solar brightness**: Calculated from sun position (elevation angle)
+  - Below horizon (night) → minimum brightness (25%)
+  - At horizon (sunrise/sunset) → minimum brightness
+  - Peak elevation (~60° at noon in Brno) → 100% brightness
+  - Linear curve following sun elevation
+- **Hue brightness**: Manual control via Hue light dimming
+- **Combined**: Gives natural daylight curve with manual override capability
+
+**First-time setup:**
+1. Install phue: `pip3 install phue requests`
+2. Run with `--hue` flag
+3. Press the button on your Hue bridge when prompted
+4. Credentials saved to `~/.python_hue` for future use
+
+**Command-line options:**
+```bash
+# Basic (auto-discover bridge, solar enabled for Brno, CZ)
+sudo python3 keyboard_overlay_gui.py --boblight --hue
+
+# Manual bridge IP
+sudo python3 keyboard_overlay_gui.py --boblight --hue --hue-bridge 192.168.1.123
+
+# Monitor specific light
+sudo python3 keyboard_overlay_gui.py --boblight --hue --hue-light "Living Room"
+
+# Custom minimum brightness (default: 0.25 = 25%)
+sudo python3 keyboard_overlay_gui.py --boblight --hue --hue-min-brightness 0.10
+
+# Custom location (latitude/longitude)
+sudo python3 keyboard_overlay_gui.py --boblight --hue --hue-latitude 50.08 --hue-longitude 14.43
+
+# Disable solar brightness (use only Hue light)
+sudo python3 keyboard_overlay_gui.py --boblight --hue --hue-no-solar
+
+# Adjust polling frequency (default: 5.0 seconds)
+sudo python3 keyboard_overlay_gui.py --boblight --hue --hue-poll-interval 3.0
+```
+
+**Features:**
+- Auto-discovery of Hue bridge (or manual IP configuration)
+- Solar brightness based on sun elevation (automatic sunrise/sunset)
+- Combines Hue and solar brightness using max() - natural daylight curve with manual override
+- Polls Hue bridge every 5 seconds (configurable)
+- Graceful degradation to 100% brightness if bridge unavailable
+- Automatic reconnection on connection loss
+- Thread-safe brightness scaling
+
+**Example scenarios:**
+- Night, Hue off → 25% (minimum)
+- Night, Hue at 100% → 100% (Hue wins)
+- Daytime (noon), Hue off → ~100% (solar wins)
+- Daytime (noon), Hue at 50% → ~100% (solar wins)
+- Sunrise/sunset, Hue off → 25% (minimum)
+- Sunrise/sunset, Hue at 100% → 100% (Hue wins)
 
 ## Components
 

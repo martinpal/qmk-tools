@@ -214,6 +214,9 @@ class KeyboardOverlay(QWidget):
         self.boblight_refresh_timer = None
         self.boblight_current_color = None
 
+        # Hue bridge integration (set later by main)
+        self.hue_client = None
+
         # Thread communication
         self.update_signal = LayerUpdateSignal()
         self.update_signal.layer_changed.connect(self.on_layer_changed)
@@ -834,7 +837,21 @@ class KeyboardOverlay(QWidget):
     def refresh_boblight_color(self):
         """Periodically refresh boblight color to override boblight-X11"""
         if hasattr(self, 'boblight') and self.boblight and self.boblight_current_color:
-            self.boblight.set_color_from_qcolor(self.boblight_current_color)
+            color = self.boblight_current_color
+
+            # Apply Hue brightness scaling if Hue client is available
+            if hasattr(self, 'hue_client') and self.hue_client:
+                scale = self.hue_client.brightness_scale
+                # Scale the QColor RGB values
+                scaled_color = QColor(
+                    int(color.red() * scale),
+                    int(color.green() * scale),
+                    int(color.blue() * scale)
+                )
+                self.boblight.set_color_from_qcolor(scaled_color)
+            else:
+                # No Hue client or not connected - use full brightness
+                self.boblight.set_color_from_qcolor(color)
 
     def set_interactive(self, interactive: bool):
         """Toggle interactive mode"""
@@ -1318,6 +1335,16 @@ def main():
     parser.add_argument('--boblight-priority', type=int, default=100, help='Boblight priority (default: 100, LOWER = higher priority, 255 = disabled, boblight-X11 uses 128)')
     parser.add_argument('--boblight-leds', type=str, help='Comma-separated LED indices to control (e.g., "0,1,2,3,4,5"), omit for all LEDs')
 
+    # Hue bridge integration arguments
+    parser.add_argument('--hue', action='store_true', help='Enable Philips Hue bridge brightness control')
+    parser.add_argument('--hue-bridge', type=str, help='Hue bridge IP address (default: auto-discover)')
+    parser.add_argument('--hue-light', type=str, default='Velké světlo v obýváku', help='Hue light name to monitor (default: "Velké světlo v obýváku")')
+    parser.add_argument('--hue-min-brightness', type=float, default=0.25, help='Minimum boblight brightness when Hue is off (0.0-1.0, default: 0.25)')
+    parser.add_argument('--hue-poll-interval', type=float, default=5.0, help='Hue polling interval in seconds (default: 5.0)')
+    parser.add_argument('--hue-latitude', type=float, default=49.19, help='Latitude for solar calculations (default: 49.19 = Brno, CZ)')
+    parser.add_argument('--hue-longitude', type=float, default=16.61, help='Longitude for solar calculations (default: 16.61 = Brno, CZ)')
+    parser.add_argument('--hue-no-solar', action='store_true', help='Disable solar brightness calculations (use only Hue light)')
+
     args = parser.parse_args()
 
     # Parse keyboard selection
@@ -1439,6 +1466,45 @@ def main():
             boblight = None
     overlay.boblight = boblight
 
+    # Setup Hue bridge integration if enabled
+    hue_client = None
+    if args.hue:
+        if not BOBLIGHT_AVAILABLE:
+            print("Error: Hue integration requested but boblight must also be enabled")
+            return 1
+
+        try:
+            import hue_bridge_client
+            HUE_AVAILABLE = True
+        except ImportError:
+            print("Error: Hue integration requested but hue_bridge_client module not available")
+            print("Install with: pip install phue")
+            return 1
+
+        print(f"\n[HUE] Initializing Hue bridge integration...")
+        hue_client = hue_bridge_client.HueBridgeClient(
+            bridge_ip=args.hue_bridge,
+            light_name=args.hue_light,
+            min_brightness=args.hue_min_brightness,
+            poll_interval=args.hue_poll_interval,
+            auto_discover=(args.hue_bridge is None),
+            latitude=args.hue_latitude,
+            longitude=args.hue_longitude,
+            use_solar=not args.hue_no_solar
+        )
+
+        if hue_client.connect():
+            hue_client.start_polling()
+            overlay.hue_client = hue_client
+            print(f"[HUE] Integration enabled, monitoring '{args.hue_light}'")
+            print(f"[HUE] Min brightness: {args.hue_min_brightness*100:.0f}%")
+            if not args.hue_no_solar:
+                print(f"[HUE] Solar brightness enabled (location: {args.hue_latitude:.2f}°N, {args.hue_longitude:.2f}°E)")
+        else:
+            print("[HUE] Warning: Failed to connect to Hue bridge, continuing without Hue")
+            hue_client = None
+    overlay.hue_client = hue_client
+
     # Load keyboard layers
     overlay.load_layers()
 
@@ -1460,6 +1526,10 @@ def main():
     finally:
         keyboard_monitor.running = False
         keyboard.close()
+        # Stop Hue polling if enabled
+        if hue_client:
+            hue_client.stop_polling()
+            hue_client.disconnect()
 
     return ret if 'ret' in locals() else 0
 
