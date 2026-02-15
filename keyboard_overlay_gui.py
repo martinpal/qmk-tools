@@ -214,6 +214,14 @@ class KeyboardOverlay(QWidget):
         self.boblight_refresh_timer = None
         self.boblight_current_color = None
 
+        # Boblight animation state
+        self.boblight_anim_timer = None
+        self.boblight_anim_step = 0
+        self.boblight_anim_target_color = None
+        self.boblight_anim_led_states = {}  # Per-LED current state: led_idx → (r, g, b) or None (use off)
+        self.boblight_anim_fade_steps = 5  # frames to fade each LED from old to target
+        self.boblight_anim_ring_delay = 2  # frames between activating successive rings
+
         # Hue bridge integration (set later by main)
         self.hue_client = None
 
@@ -785,7 +793,7 @@ class KeyboardOverlay(QWidget):
             self.gnome_bridge.update_layer(layer_name, layer_color_hex)
 
         # Update boblight if available
-        # Strategy: Stay connected, toggle priority between 100 (active) and 255 (disabled)
+        # Strategy: Stay connected, use 'set light <name> use on/off' for per-LED transparency
         if hasattr(self, 'boblight') and self.boblight:
             print(f"[BOBLIGHT] Layer changed to {layer_num}")
 
@@ -796,51 +804,141 @@ class KeyboardOverlay(QWidget):
                     print(f"[BOBLIGHT] Failed to connect")
                     return
 
-            # Stop any existing refresh timer
+            # Stop any existing timers
             if self.boblight_refresh_timer:
                 self.boblight_refresh_timer.stop()
                 self.boblight_refresh_timer = None
+            if self.boblight_anim_timer:
+                self.boblight_anim_timer.stop()
+                self.boblight_anim_timer = None
 
             if layer_num == 0:
-                # Base layer - set priority to 255 (disabled) to let boblight-X11 win
-                print(f"[BOBLIGHT] Setting priority to 255 (disabled) for base layer")
-                self.boblight.set_priority(255)
+                # Base layer - release all LEDs (use off) to let boblight-X11 shine through
+                print(f"[BOBLIGHT] Releasing all LEDs (use off) for base layer")
+                self.boblight.set_all_use(False)
+                self.boblight_anim_led_states = {}
                 self.boblight_current_color = None
+                self.boblight_anim_target_color = None
             else:
-                # Non-base layers - set priority to 100 (active) to override boblight-X11
-                print(f"[BOBLIGHT] Setting priority to 100 (active) for layer {layer_num}")
-                self.boblight.set_priority(100)
-
                 # Set layer-specific vibrant color
                 layer_color_name = self.layer_info.get(layer_num, {}).get("color", "WHITE")
                 color = self.boblight_colors.get(layer_color_name, QColor(255, 255, 255))
                 print(f"[BOBLIGHT] Setting color {layer_color_name}: RGB({color.red()}, {color.green()}, {color.blue()})")
 
-                # Store current color for refresh timer
+                # boblight_anim_led_states already holds the current per-LED state
+                # (from a previous animation or steady state). This is used as the
+                # "from" state for each LED individually - preserving mid-animation
+                # states, fully-on LEDs, and use-off LEDs correctly.
+
+                # Store current color for refresh timer (used after animation completes)
                 self.boblight_current_color = color
 
-                # Send color immediately (with Hue brightness scaling)
-                send_color = color
-                if hasattr(self, 'hue_client') and self.hue_client:
-                    scale = self.hue_client.brightness_scale
-                    send_color = QColor(
-                        int(color.red() * scale),
-                        int(color.green() * scale),
-                        int(color.blue() * scale)
-                    )
-                success = self.boblight.set_color_from_qcolor(send_color)
-                print(f"[BOBLIGHT] Set color result: {success}")
-
-                if success:
-                    # Start refresh timer to keep overriding boblight-X11
-                    # Device interval is 50ms (20Hz), boblight-X11 updates at 50ms (20Hz)
-                    # We refresh at 25ms (40Hz) - 2x device rate to ensure we always dominate
-                    self.boblight_refresh_timer = QTimer()
-                    self.boblight_refresh_timer.timeout.connect(self.refresh_boblight_color)
-                    self.boblight_refresh_timer.start(25)  # 25ms = 40Hz, 2x device interval
-                    print(f"[BOBLIGHT] Started refresh timer (25ms = 40Hz)")
+                # Start spread-from-center animation (LEDs activated via use on/off)
+                self.boblight_anim_target_color = color
+                self.boblight_anim_step = 0
+                self.boblight_anim_timer = QTimer()
+                self.boblight_anim_timer.timeout.connect(self._boblight_animate_step)
+                self.boblight_anim_timer.start(25)  # 25ms per frame = 40Hz
+                print(f"[BOBLIGHT] Starting spread animation")
         else:
             print(f"[BOBLIGHT] Boblight not available")
+
+    def _boblight_animate_step(self):
+        """Animate LEDs spreading from center outward with fade-in."""
+        if not self.boblight or not self.boblight.connected or not self.boblight_anim_target_color:
+            return
+
+        color = self.boblight_anim_target_color
+
+        # Apply Hue brightness scaling
+        hue_scale = 1.0
+        if hasattr(self, 'hue_client') and self.hue_client:
+            hue_scale = self.hue_client.brightness_scale
+
+        # Determine which LEDs we control
+        if self.boblight.led_indices is not None:
+            led_list = self.boblight.led_indices
+        else:
+            led_list = list(range(self.boblight.num_lights))
+
+        num_leds = len(led_list)
+        center = num_leds // 2
+        fade_steps = self.boblight_anim_fade_steps
+        ring_delay = self.boblight_anim_ring_delay
+
+        # Total rings from center to edge
+        total_rings = center + 1 if num_leds % 2 == 1 else center
+        # Animation is done when the outermost ring has fully faded in
+        max_rings = (num_leds + 1) // 2
+        total_frames = (max_rings - 1) * ring_delay + fade_steps
+
+        # Calculate per-LED color for this frame
+        # Each LED transitions from its own current state (which may differ per LED)
+        lit_leds = {}
+        for i, led_idx in enumerate(led_list):
+            # Distance from center (ring number)
+            ring = abs(i - center)
+
+            # Frame at which this ring starts fading in
+            ring_start = ring * ring_delay
+
+            # How far into the fade are we?
+            fade_progress = self.boblight_anim_step - ring_start
+
+            # This LED's current "from" state (may be None = use off)
+            from_rgb = self.boblight_anim_led_states.get(led_idx)
+
+            if fade_progress < 0:
+                # Not started yet - keep current state
+                if from_rgb is not None:
+                    lit_leds[led_idx] = from_rgb
+                # else: stays 'use off' (boblight-X11 shines through)
+                continue
+
+            if fade_progress >= fade_steps:
+                t = 1.0
+            else:
+                t = (fade_progress / fade_steps) ** 2  # Quadratic ease-in
+
+            # Target color with Hue scaling
+            tr = color.red() / 255.0 * hue_scale
+            tg = color.green() / 255.0 * hue_scale
+            tb = color.blue() / 255.0 * hue_scale
+
+            if from_rgb is not None:
+                # Cross-fade from current color to new color
+                fr, fg, fb = from_rgb
+                r = fr * (1.0 - t) + tr * t
+                g = fg * (1.0 - t) + tg * t
+                b = fb * (1.0 - t) + tb * t
+            else:
+                # Fading in from nothing (boblight-X11)
+                r = tr * t
+                g = tg * t
+                b = tb * t
+
+            rgb = (r, g, b)
+            lit_leds[led_idx] = rgb
+            # Update per-LED state for potential mid-animation interruption
+            self.boblight_anim_led_states[led_idx] = rgb
+
+        self.boblight.set_per_led_with_use(lit_leds, led_list)
+
+        self.boblight_anim_step += 1
+
+        # Animation complete - switch to steady refresh
+        if self.boblight_anim_step > total_frames:
+            self.boblight_anim_timer.stop()
+            self.boblight_anim_timer = None
+            self.boblight_anim_target_color = None
+
+            # Ensure all controlled LEDs are 'use on' for steady state
+            self.boblight.set_all_use(True)
+
+            # Start normal refresh timer to maintain color against boblight-X11
+            self.boblight_refresh_timer = QTimer()
+            self.boblight_refresh_timer.timeout.connect(self.refresh_boblight_color)
+            self.boblight_refresh_timer.start(25)
 
     def refresh_boblight_color(self):
         """Periodically refresh boblight color to override boblight-X11"""
@@ -848,18 +946,25 @@ class KeyboardOverlay(QWidget):
             color = self.boblight_current_color
 
             # Apply Hue brightness scaling if Hue client is available
+            hue_scale = 1.0
             if hasattr(self, 'hue_client') and self.hue_client:
-                scale = self.hue_client.brightness_scale
-                # Scale the QColor RGB values
-                scaled_color = QColor(
-                    int(color.red() * scale),
-                    int(color.green() * scale),
-                    int(color.blue() * scale)
-                )
-                self.boblight.set_color_from_qcolor(scaled_color)
+                hue_scale = self.hue_client.brightness_scale
+
+            scaled_color = QColor(
+                int(color.red() * hue_scale),
+                int(color.green() * hue_scale),
+                int(color.blue() * hue_scale)
+            )
+            self.boblight.set_color_from_qcolor(scaled_color)
+
+            # Keep per-LED state in sync for potential mid-refresh animation start
+            rgb = (color.red() / 255.0 * hue_scale, color.green() / 255.0 * hue_scale, color.blue() / 255.0 * hue_scale)
+            if self.boblight.led_indices is not None:
+                for idx in self.boblight.led_indices:
+                    self.boblight_anim_led_states[idx] = rgb
             else:
-                # No Hue client or not connected - use full brightness
-                self.boblight.set_color_from_qcolor(color)
+                for idx in range(self.boblight.num_lights):
+                    self.boblight_anim_led_states[idx] = rgb
 
     def set_interactive(self, interactive: bool):
         """Toggle interactive mode"""

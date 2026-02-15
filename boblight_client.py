@@ -210,6 +210,95 @@ class BoblightClient:
             print(f"[BOBLIGHT] Invalid hex color '{hex_color}' - {e}")
             return False
 
+    def set_per_led_colors(self, led_colors) -> bool:
+        """
+        Set individual colors per LED.
+
+        Args:
+            led_colors: dict mapping LED index to (r, g, b) tuples (0.0-1.0)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        with self.lock:
+            if not self.connected or not self.sock:
+                return False
+
+            try:
+                for idx, (r, g, b) in led_colors.items():
+                    if idx < len(self.light_names):
+                        name = self.light_names[idx]
+                        self._send(f"set light {name} rgb {r:.6f} {g:.6f} {b:.6f}\n")
+
+                if not self._send("sync\n"):
+                    return False
+
+                return True
+
+            except Exception as e:
+                print(f"[BOBLIGHT] Error setting per-LED colors - {e}")
+                self.connected = False
+                return False
+
+    def set_led_use(self, led_idx: int, use: bool) -> bool:
+        """Set 'use on' or 'use off' for a single LED.
+        When 'use off', the LED falls through to lower-priority clients."""
+        with self.lock:
+            if not self.connected or not self.sock:
+                return False
+            if led_idx < len(self.light_names):
+                name = self.light_names[led_idx]
+                state = "on" if use else "off"
+                return self._send(f"set light {name} use {state}\n")
+            return False
+
+    def set_all_use(self, use: bool) -> bool:
+        """Set 'use on' or 'use off' for all controlled LEDs."""
+        with self.lock:
+            if not self.connected or not self.sock:
+                return False
+            indices = self.led_indices if self.led_indices is not None else range(len(self.light_names))
+            state = "on" if use else "off"
+            for idx in indices:
+                if idx < len(self.light_names):
+                    self._send(f"set light {self.light_names[idx]} use {state}\n")
+            return self._send("sync\n")
+
+    def set_per_led_with_use(self, lit_leds: dict, all_indices: list) -> bool:
+        """Set colors for lit LEDs (use on) and release unlit LEDs (use off).
+
+        Args:
+            lit_leds: dict mapping LED index to (r, g, b) tuples (0.0-1.0)
+            all_indices: list of all LED indices we control
+
+        Returns:
+            True if successful, False otherwise
+        """
+        with self.lock:
+            if not self.connected or not self.sock:
+                return False
+
+            try:
+                lit_set = set(lit_leds.keys())
+
+                for idx in all_indices:
+                    if idx >= len(self.light_names):
+                        continue
+                    name = self.light_names[idx]
+                    if idx in lit_set:
+                        self._send(f"set light {name} use on\n")
+                        r, g, b = lit_leds[idx]
+                        self._send(f"set light {name} rgb {r:.6f} {g:.6f} {b:.6f}\n")
+                    else:
+                        self._send(f"set light {name} use off\n")
+
+                return self._send("sync\n")
+
+            except Exception as e:
+                print(f"[BOBLIGHT] Error setting per-LED with use - {e}")
+                self.connected = False
+                return False
+
     def clear(self) -> bool:
         """Clear (turn off) configured LEDs by setting to black"""
         return self.set_color(0.0, 0.0, 0.0)
