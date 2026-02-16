@@ -813,12 +813,14 @@ class KeyboardOverlay(QWidget):
                 self.boblight_anim_timer = None
 
             if layer_num == 0:
-                # Base layer - release all LEDs (use off) to let boblight-X11 shine through
-                print(f"[BOBLIGHT] Releasing all LEDs (use off) for base layer")
-                self.boblight.set_all_use(False)
-                self.boblight_anim_led_states = {}
+                # Base layer - animate LEDs off from edges inward at 2x speed
                 self.boblight_current_color = None
-                self.boblight_anim_target_color = None
+                self.boblight_anim_target_color = None  # None = fade to off
+                self.boblight_anim_step = 0
+                self.boblight_anim_timer = QTimer()
+                self.boblight_anim_timer.timeout.connect(self._boblight_animate_step)
+                self.boblight_anim_timer.start(25)  # 25ms per frame = 40Hz
+                print(f"[BOBLIGHT] Starting fade-out animation")
             else:
                 # Set layer-specific vibrant color
                 layer_color_name = self.layer_info.get(layer_num, {}).get("color", "WHITE")
@@ -844,10 +846,11 @@ class KeyboardOverlay(QWidget):
             print(f"[BOBLIGHT] Boblight not available")
 
     def _boblight_animate_step(self):
-        """Animate LEDs spreading from center outward with fade-in."""
-        if not self.boblight or not self.boblight.connected or not self.boblight_anim_target_color:
+        """Animate LEDs with spread-from-center (fade-in) or collapse-to-center (fade-out)."""
+        if not self.boblight or not self.boblight.connected:
             return
 
+        fading_out = self.boblight_anim_target_color is None
         color = self.boblight_anim_target_color
 
         # Apply Hue brightness scaling
@@ -863,24 +866,35 @@ class KeyboardOverlay(QWidget):
 
         num_leds = len(led_list)
         center = num_leds // 2
-        fade_steps = self.boblight_anim_fade_steps
-        ring_delay = self.boblight_anim_ring_delay
+        max_ring = (num_leds - 1) // 2
 
-        # Total rings from center to edge
-        total_rings = center + 1 if num_leds % 2 == 1 else center
-        # Animation is done when the outermost ring has fully faded in
-        max_rings = (num_leds + 1) // 2
-        total_frames = (max_rings - 1) * ring_delay + fade_steps
+        if fading_out:
+            # Fade-out: 2x speed, edges inward
+            fade_steps = max(1, self.boblight_anim_fade_steps // 2)
+            ring_delay = max(1, self.boblight_anim_ring_delay // 2)
+        else:
+            # Fade-in: normal speed, center outward
+            fade_steps = self.boblight_anim_fade_steps
+            ring_delay = self.boblight_anim_ring_delay
+
+        # Animation is done when the last ring has fully transitioned
+        total_frames = max_ring * ring_delay + fade_steps
 
         # Calculate per-LED color for this frame
-        # Each LED transitions from its own current state (which may differ per LED)
         lit_leds = {}
         for i, led_idx in enumerate(led_list):
             # Distance from center (ring number)
             ring = abs(i - center)
 
-            # Frame at which this ring starts fading in
-            ring_start = ring * ring_delay
+            if fading_out:
+                # Edges first: invert ring order (outermost = ring 0, center = max_ring)
+                anim_ring = max_ring - ring
+            else:
+                # Center first
+                anim_ring = ring
+
+            # Frame at which this ring starts its transition
+            ring_start = anim_ring * ring_delay
 
             # How far into the fade are we?
             fade_progress = self.boblight_anim_step - ring_start
@@ -892,7 +906,6 @@ class KeyboardOverlay(QWidget):
                 # Not started yet - keep current state
                 if from_rgb is not None:
                     lit_leds[led_idx] = from_rgb
-                # else: stays 'use off' (boblight-X11 shines through)
                 continue
 
             if fade_progress >= fade_steps:
@@ -900,45 +913,63 @@ class KeyboardOverlay(QWidget):
             else:
                 t = (fade_progress / fade_steps) ** 2  # Quadratic ease-in
 
-            # Target color with Hue scaling
-            tr = color.red() / 255.0 * hue_scale
-            tg = color.green() / 255.0 * hue_scale
-            tb = color.blue() / 255.0 * hue_scale
-
-            if from_rgb is not None:
-                # Cross-fade from current color to new color
-                fr, fg, fb = from_rgb
-                r = fr * (1.0 - t) + tr * t
-                g = fg * (1.0 - t) + tg * t
-                b = fb * (1.0 - t) + tb * t
+            if fading_out:
+                # Fade from current color to off (use off)
+                if from_rgb is not None and t < 1.0:
+                    fr, fg, fb = from_rgb
+                    r = fr * (1.0 - t)
+                    g = fg * (1.0 - t)
+                    b = fb * (1.0 - t)
+                    rgb = (r, g, b)
+                    lit_leds[led_idx] = rgb
+                    self.boblight_anim_led_states[led_idx] = rgb
+                else:
+                    # Fully faded out - release this LED
+                    self.boblight_anim_led_states.pop(led_idx, None)
+                    # Don't add to lit_leds → will get 'use off'
             else:
-                # Fading in from nothing (boblight-X11)
-                r = tr * t
-                g = tg * t
-                b = tb * t
+                # Fade-in / cross-fade to target color
+                tr = color.red() / 255.0 * hue_scale
+                tg = color.green() / 255.0 * hue_scale
+                tb = color.blue() / 255.0 * hue_scale
 
-            rgb = (r, g, b)
-            lit_leds[led_idx] = rgb
-            # Update per-LED state for potential mid-animation interruption
-            self.boblight_anim_led_states[led_idx] = rgb
+                if from_rgb is not None:
+                    fr, fg, fb = from_rgb
+                    r = fr * (1.0 - t) + tr * t
+                    g = fg * (1.0 - t) + tg * t
+                    b = fb * (1.0 - t) + tb * t
+                else:
+                    r = tr * t
+                    g = tg * t
+                    b = tb * t
+
+                rgb = (r, g, b)
+                lit_leds[led_idx] = rgb
+                self.boblight_anim_led_states[led_idx] = rgb
 
         self.boblight.set_per_led_with_use(lit_leds, led_list)
 
         self.boblight_anim_step += 1
 
-        # Animation complete - switch to steady refresh
+        # Animation complete
         if self.boblight_anim_step > total_frames:
             self.boblight_anim_timer.stop()
             self.boblight_anim_timer = None
-            self.boblight_anim_target_color = None
 
-            # Ensure all controlled LEDs are 'use on' for steady state
-            self.boblight.set_all_use(True)
+            if fading_out:
+                # All LEDs released
+                self.boblight.set_all_use(False)
+                self.boblight_anim_led_states = {}
+            else:
+                self.boblight_anim_target_color = None
 
-            # Start normal refresh timer to maintain color against boblight-X11
-            self.boblight_refresh_timer = QTimer()
-            self.boblight_refresh_timer.timeout.connect(self.refresh_boblight_color)
-            self.boblight_refresh_timer.start(25)
+                # Ensure all controlled LEDs are 'use on' for steady state
+                self.boblight.set_all_use(True)
+
+                # Start normal refresh timer to maintain color against boblight-X11
+                self.boblight_refresh_timer = QTimer()
+                self.boblight_refresh_timer.timeout.connect(self.refresh_boblight_color)
+                self.boblight_refresh_timer.start(25)
 
     def refresh_boblight_color(self):
         """Periodically refresh boblight color to override boblight-X11"""
