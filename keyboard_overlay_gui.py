@@ -222,8 +222,8 @@ class KeyboardOverlay(QWidget):
         self.boblight_anim_fade_steps = 5  # frames to fade each LED from old to target
         self.boblight_anim_ring_delay = 2  # frames between activating successive rings
 
-        # Hue bridge integration (set later by main)
-        self.hue_client = None
+        # Home Assistant integration (set later by main)
+        self.ha_client = None
 
         # Thread communication
         self.update_signal = LayerUpdateSignal()
@@ -853,10 +853,10 @@ class KeyboardOverlay(QWidget):
         fading_out = self.boblight_anim_target_color is None
         color = self.boblight_anim_target_color
 
-        # Apply Hue brightness scaling
-        hue_scale = 1.0
-        if hasattr(self, 'hue_client') and self.hue_client:
-            hue_scale = self.hue_client.brightness_scale
+        # Apply Home Assistant brightness scaling
+        ha_scale = 1.0
+        if hasattr(self, 'ha_client') and self.ha_client:
+            ha_scale = self.ha_client.brightness_scale
 
         # Determine which LEDs we control
         if self.boblight.led_indices is not None:
@@ -929,9 +929,9 @@ class KeyboardOverlay(QWidget):
                     # Don't add to lit_leds → will get 'use off'
             else:
                 # Fade-in / cross-fade to target color
-                tr = color.red() / 255.0 * hue_scale
-                tg = color.green() / 255.0 * hue_scale
-                tb = color.blue() / 255.0 * hue_scale
+                tr = color.red() / 255.0 * ha_scale
+                tg = color.green() / 255.0 * ha_scale
+                tb = color.blue() / 255.0 * ha_scale
 
                 if from_rgb is not None:
                     fr, fg, fb = from_rgb
@@ -976,20 +976,20 @@ class KeyboardOverlay(QWidget):
         if hasattr(self, 'boblight') and self.boblight and self.boblight_current_color:
             color = self.boblight_current_color
 
-            # Apply Hue brightness scaling if Hue client is available
-            hue_scale = 1.0
-            if hasattr(self, 'hue_client') and self.hue_client:
-                hue_scale = self.hue_client.brightness_scale
+            # Apply Home Assistant brightness scaling if HA client is available
+            ha_scale = 1.0
+            if hasattr(self, 'ha_client') and self.ha_client:
+                ha_scale = self.ha_client.brightness_scale
 
             scaled_color = QColor(
-                int(color.red() * hue_scale),
-                int(color.green() * hue_scale),
-                int(color.blue() * hue_scale)
+                int(color.red() * ha_scale),
+                int(color.green() * ha_scale),
+                int(color.blue() * ha_scale)
             )
             self.boblight.set_color_from_qcolor(scaled_color)
 
             # Keep per-LED state in sync for potential mid-refresh animation start
-            rgb = (color.red() / 255.0 * hue_scale, color.green() / 255.0 * hue_scale, color.blue() / 255.0 * hue_scale)
+            rgb = (color.red() / 255.0 * ha_scale, color.green() / 255.0 * ha_scale, color.blue() / 255.0 * ha_scale)
             if self.boblight.led_indices is not None:
                 for idx in self.boblight.led_indices:
                     self.boblight_anim_led_states[idx] = rgb
@@ -1479,15 +1479,16 @@ def main():
     parser.add_argument('--boblight-priority', type=int, default=100, help='Boblight priority (default: 100, LOWER = higher priority, 255 = disabled, boblight-X11 uses 128)')
     parser.add_argument('--boblight-leds', type=str, help='Comma-separated LED indices to control (e.g., "0,1,2,3,4,5"), omit for all LEDs')
 
-    # Hue bridge integration arguments
-    parser.add_argument('--hue', action='store_true', help='Enable Philips Hue bridge brightness control')
-    parser.add_argument('--hue-bridge', type=str, help='Hue bridge IP address (default: auto-discover)')
-    parser.add_argument('--hue-light', type=str, default='Velké světlo v obýváku', help='Hue light name to monitor (default: "Velké světlo v obýváku")')
-    parser.add_argument('--hue-min-brightness', type=float, default=0.25, help='Minimum boblight brightness when Hue is off (0.0-1.0, default: 0.25)')
-    parser.add_argument('--hue-poll-interval', type=float, default=5.0, help='Hue polling interval in seconds (default: 5.0)')
-    parser.add_argument('--hue-latitude', type=float, default=49.19, help='Latitude for solar calculations (default: 49.19 = Brno, CZ)')
-    parser.add_argument('--hue-longitude', type=float, default=16.61, help='Longitude for solar calculations (default: 16.61 = Brno, CZ)')
-    parser.add_argument('--hue-no-solar', action='store_true', help='Disable solar brightness calculations (use only Hue light)')
+    # Home Assistant integration arguments
+    parser.add_argument('--ha', action='store_true', help='Enable Home Assistant brightness control')
+    parser.add_argument('--ha-url', type=str, default='http://homeassistant.local:8123', help='Home Assistant base URL (default: http://homeassistant.local:8123, or set HASS_URL env var)')
+    parser.add_argument('--ha-token', type=str, default=os.environ.get('HASS_TOKEN'), help='Home Assistant long-lived access token (default: HASS_TOKEN env var)')
+    parser.add_argument('--ha-entity', type=str, default='light.velke_svetlo_v_obyvaku', help='Home Assistant light entity_id to monitor (default: light.velke_svetlo_v_obyvaku)')
+    parser.add_argument('--ha-min-brightness', type=float, default=0.25, help='Minimum boblight brightness when light is off (0.0-1.0, default: 0.25)')
+    parser.add_argument('--ha-poll-interval', type=float, default=5.0, help='Home Assistant polling interval in seconds (default: 5.0)')
+    parser.add_argument('--ha-latitude', type=float, default=49.19, help='Latitude for solar calculations (default: 49.19 = Brno, CZ)')
+    parser.add_argument('--ha-longitude', type=float, default=16.61, help='Longitude for solar calculations (default: 16.61 = Brno, CZ)')
+    parser.add_argument('--ha-no-solar', action='store_true', help='Disable solar brightness calculations (use only Home Assistant light)')
 
     args = parser.parse_args()
 
@@ -1610,44 +1611,44 @@ def main():
             boblight = None
     overlay.boblight = boblight
 
-    # Setup Hue bridge integration if enabled
-    hue_client = None
-    if args.hue:
+    # Setup Home Assistant integration if enabled
+    ha_client = None
+    if args.ha:
         if not BOBLIGHT_AVAILABLE:
-            print("Error: Hue integration requested but boblight must also be enabled")
+            print("Error: Home Assistant integration requested but boblight must also be enabled")
             return 1
 
         try:
-            import hue_bridge_client
-            HUE_AVAILABLE = True
+            import homeassistant_client
+            HA_AVAILABLE = True
         except ImportError:
-            print("Error: Hue integration requested but hue_bridge_client module not available")
-            print("Install with: pip install phue")
+            print("Error: Home Assistant integration requested but homeassistant_client module not available")
+            print("Install with: pip install requests astral")
             return 1
 
-        print(f"\n[HUE] Initializing Hue bridge integration...")
-        hue_client = hue_bridge_client.HueBridgeClient(
-            bridge_ip=args.hue_bridge,
-            light_name=args.hue_light,
-            min_brightness=args.hue_min_brightness,
-            poll_interval=args.hue_poll_interval,
-            auto_discover=(args.hue_bridge is None),
-            latitude=args.hue_latitude,
-            longitude=args.hue_longitude,
-            use_solar=not args.hue_no_solar
+        print(f"\n[HA] Initializing Home Assistant integration...")
+        ha_client = homeassistant_client.HomeAssistantClient(
+            base_url=args.ha_url,
+            token=args.ha_token,
+            entity_id=args.ha_entity,
+            min_brightness=args.ha_min_brightness,
+            poll_interval=args.ha_poll_interval,
+            latitude=args.ha_latitude,
+            longitude=args.ha_longitude,
+            use_solar=not args.ha_no_solar
         )
 
-        if hue_client.connect():
-            hue_client.start_polling()
-            overlay.hue_client = hue_client
-            print(f"[HUE] Integration enabled, monitoring '{args.hue_light}'")
-            print(f"[HUE] Min brightness: {args.hue_min_brightness*100:.0f}%")
-            if not args.hue_no_solar:
-                print(f"[HUE] Solar brightness enabled (location: {args.hue_latitude:.2f}°N, {args.hue_longitude:.2f}°E)")
+        if ha_client.connect():
+            ha_client.start_polling()
+            overlay.ha_client = ha_client
+            print(f"[HA] Integration enabled, monitoring '{args.ha_entity}'")
+            print(f"[HA] Min brightness: {args.ha_min_brightness*100:.0f}%")
+            if not args.ha_no_solar:
+                print(f"[HA] Solar brightness enabled (location: {args.ha_latitude:.2f}°N, {args.ha_longitude:.2f}°E)")
         else:
-            print("[HUE] Warning: Failed to connect to Hue bridge, continuing without Hue")
-            hue_client = None
-    overlay.hue_client = hue_client
+            print("[HA] Warning: Failed to connect to Home Assistant, continuing without HA")
+            ha_client = None
+    overlay.ha_client = ha_client
 
     # Load keyboard layers
     overlay.load_layers()
@@ -1670,10 +1671,10 @@ def main():
     finally:
         keyboard_monitor.running = False
         keyboard.close()
-        # Stop Hue polling if enabled
-        if hue_client:
-            hue_client.stop_polling()
-            hue_client.disconnect()
+        # Stop Home Assistant polling if enabled
+        if ha_client:
+            ha_client.stop_polling()
+            ha_client.disconnect()
 
     return ret if 'ret' in locals() else 0
 

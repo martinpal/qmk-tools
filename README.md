@@ -11,7 +11,7 @@ Collection of tools for QMK keyboards, including a real-time keyboard overlay GU
 - **Click-through transparent window** - Doesn't interfere with your workflow
 - **GNOME Shell integration** - Layer indicator in the top bar
 - **Boblight integration** - Ambient LED lighting feedback based on keyboard layer (optional)
-- **Hue bridge integration** - Dynamic LED brightness scaling based on Philips Hue light (optional)
+- **Home Assistant integration** - Dynamic LED brightness scaling based on a Home Assistant light (optional)
 - **Corsair mouse monitor** - Tracks mouse battery and DPI changes
 
 ### Supported Keyboards
@@ -57,7 +57,7 @@ sudo apt install python3-pyqt5 python3-usb python3-hid python3-dbus python3-xlib
 - `python3-dbus` - D-Bus communication for GNOME integration
 - `python3-xlib` - X11 window management (click-through, always-on-top)
 
-**For Hue bridge integration (optional):**
+**For Home Assistant integration (optional):**
 
 With venv (automatic via script):
 ```bash
@@ -67,7 +67,7 @@ With venv (automatic via script):
 
 Without venv (manual installation):
 ```bash
-pip3 install phue requests
+pip3 install requests astral
 ```
 
 **Note:** Without `python3-xlib`, the overlay will still work but click-through and always-on-top features will be disabled.
@@ -140,70 +140,80 @@ sudo python3 keyboard_overlay_gui.py --boblight --boblight-leds "0,1,2,3,4,5"
 
 See [BOBLIGHT_INTEGRATION.md](BOBLIGHT_INTEGRATION.md) for detailed configuration and usage.
 
-### Hue Bridge Integration (Optional)
+### Home Assistant Integration (Optional)
 
-Dynamically scale boblight LED brightness based on Philips Hue light brightness **and** solar elevation (time of day):
+Dynamically scale boblight LED brightness based on a Home Assistant light entity's brightness **and** solar elevation (time of day):
 
 ```bash
-sudo python3 keyboard_overlay_gui.py --boblight --hue
+sudo python3 keyboard_overlay_gui.py --boblight --ha
 ```
 
 **How it works:**
-- Uses **max(Hue brightness, solar brightness)** - whichever is brighter wins
+- Uses **max(HA brightness, solar brightness)** - whichever is brighter wins
 - **Solar brightness**: Calculated from sun position (elevation angle)
   - Below horizon (night) → minimum brightness (25%)
   - At horizon (sunrise/sunset) → minimum brightness
   - Peak elevation (~60° at noon in Brno) → 100% brightness
   - Linear curve following sun elevation
-- **Hue brightness**: Manual control via Hue light dimming
+- **HA brightness**: Manual control via Home Assistant light dimming
 - **Combined**: Gives natural daylight curve with manual override capability
 
 **First-time setup:**
-1. Install phue: `pip3 install phue requests`
-2. Run with `--hue` flag
-3. Press the button on your Hue bridge when prompted
-4. Credentials saved to `~/.python_hue` for future use
+1. Install dependencies: `pip3 install requests astral`
+2. Create a long-lived access token in Home Assistant:
+   - Go to your profile (bottom-left of HA sidebar)
+   - Scroll to **Long-Lived Access Tokens**
+   - Click **Create Token**, give it a name, copy the token
+3. Run with `--ha` flag, passing the token via `--ha-token` or `HASS_TOKEN` env var:
+   ```bash
+   # Option A: command-line argument
+   sudo python3 keyboard_overlay_gui.py --boblight --ha --ha-token "eyJhbGciOi..."
+
+   # Option B: environment variable (recommended)
+   export HASS_TOKEN="eyJhbGciOi..."
+   sudo python3 keyboard_overlay_gui.py --boblight --ha
+   ```
 
 **Command-line options:**
 ```bash
-# Basic (auto-discover bridge, solar enabled for Brno, CZ)
-sudo python3 keyboard_overlay_gui.py --boblight --hue
+# Basic (default URL: http://homeassistant.local:8123)
+sudo python3 keyboard_overlay_gui.py --boblight --ha
 
-# Manual bridge IP
-sudo python3 keyboard_overlay_gui.py --boblight --hue --hue-bridge 192.168.1.123
+# Custom Home Assistant URL
+sudo python3 keyboard_overlay_gui.py --boblight --ha --ha-url http://192.168.1.50:8123
 
-# Monitor specific light
-sudo python3 keyboard_overlay_gui.py --boblight --hue --hue-light "Living Room"
+# Monitor specific light entity
+sudo python3 keyboard_overlay_gui.py --boblight --ha --ha-entity light.living_room
 
 # Custom minimum brightness (default: 0.25 = 25%)
-sudo python3 keyboard_overlay_gui.py --boblight --hue --hue-min-brightness 0.10
+sudo python3 keyboard_overlay_gui.py --boblight --ha --ha-min-brightness 0.10
 
 # Custom location (latitude/longitude)
-sudo python3 keyboard_overlay_gui.py --boblight --hue --hue-latitude 50.08 --hue-longitude 14.43
+sudo python3 keyboard_overlay_gui.py --boblight --ha --ha-latitude 50.08 --ha-longitude 14.43
 
-# Disable solar brightness (use only Hue light)
-sudo python3 keyboard_overlay_gui.py --boblight --hue --hue-no-solar
+# Disable solar brightness (use only Home Assistant light)
+sudo python3 keyboard_overlay_gui.py --boblight --ha --ha-no-solar
 
 # Adjust polling frequency (default: 5.0 seconds)
-sudo python3 keyboard_overlay_gui.py --boblight --hue --hue-poll-interval 3.0
+sudo python3 keyboard_overlay_gui.py --boblight --ha --ha-poll-interval 3.0
 ```
 
 **Features:**
-- Auto-discovery of Hue bridge (or manual IP configuration)
+- Uses Home Assistant REST API to poll light state
 - Solar brightness based on sun elevation (automatic sunrise/sunset)
-- Combines Hue and solar brightness using max() - natural daylight curve with manual override
-- Polls Hue bridge every 5 seconds (configurable)
-- Graceful degradation to 100% brightness if bridge unavailable
+- Combines HA and solar brightness using max() - natural daylight curve with manual override
+- Polls Home Assistant every 5 seconds (configurable)
+- Graceful degradation to 100% brightness if Home Assistant unavailable
 - Automatic reconnection on connection loss
 - Thread-safe brightness scaling
 
 **Example scenarios:**
-- Night, Hue off → 25% (minimum)
-- Night, Hue at 100% → 100% (Hue wins)
-- Daytime (noon), Hue off → ~100% (solar wins)
-- Daytime (noon), Hue at 50% → ~100% (solar wins)
-- Sunrise/sunset, Hue off → 25% (minimum)
-- Sunrise/sunset, Hue at 100% → 100% (Hue wins)
+- Night, light off → 25% (minimum)
+- Night, light at 100% → 100% (HA wins)
+- Daytime (noon), light off → ~100% (solar wins)
+- Daytime (noon), light at 50% → ~100% (solar wins)
+- Sunrise/sunset, light off → 25% (minimum)
+- Sunrise/sunset, light at 100% → 100% (HA wins)
 
 ## Components
 

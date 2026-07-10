@@ -13,8 +13,7 @@ dbus-python>=1.2.18
 # X11 window manipulation
 python-xlib>=0.31
 
-# Philips Hue bridge integration (optional, for --hue flag)
-phue>=1.1
+# Home Assistant integration (optional, for --ha flag)
 requests>=2.28.0
 
 # Solar calculations for time-of-day brightness

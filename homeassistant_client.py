@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Philips Hue Bridge Client for QMK Overlay Integration
+Home Assistant Client for QMK Overlay Integration
 
-Connects to Philips Hue bridge and monitors a specific light's brightness.
-Provides dynamic brightness scaling for boblight LEDs based on Hue light state
-and solar elevation (time of day).
+Connects to a Home Assistant instance and monitors a specific light entity's
+brightness. Provides dynamic brightness scaling for boblight LEDs based on the
+Home Assistant light state and solar elevation (time of day).
 """
 
 import threading
@@ -21,43 +21,44 @@ except ImportError:
     ASTRAL_AVAILABLE = False
 
 
-class HueBridgeClient:
-    """Client for polling Philips Hue bridge and providing brightness scaling"""
+class HomeAssistantClient:
+    """Client for polling Home Assistant and providing brightness scaling"""
 
     def __init__(self,
-                 bridge_ip: Optional[str] = None,
-                 light_name: str = "Velké světlo v obýváku",
+                 base_url: str = "http://homeassistant.local:8123",
+                 token: Optional[str] = None,
+                 entity_id: str = "light.velke_svetlo_v_obyvaku",
                  min_brightness: float = 0.25,
                  poll_interval: float = 5.0,
-                 auto_discover: bool = True,
                  latitude: float = 49.19,
                  longitude: float = 16.61,
                  use_solar: bool = True):
         """
-        Initialize Hue bridge client
+        Initialize Home Assistant client
 
         Args:
-            bridge_ip: Manual bridge IP address (overrides auto-discovery)
-            light_name: Name of the Hue light to monitor
+            base_url: Home Assistant base URL (e.g. http://homeassistant.local:8123)
+            token: Long-lived access token (or set via HASS_TOKEN env var)
+            entity_id: Light entity_id to monitor (e.g. light.living_room)
             min_brightness: Minimum brightness when light is off (0.0-1.0, default: 0.25)
             poll_interval: Polling frequency in seconds (default: 5.0)
-            auto_discover: Enable auto-discovery if bridge_ip not provided
             latitude: Latitude for solar calculations (default: 49.19 = Brno, CZ)
             longitude: Longitude for solar calculations (default: 16.61 = Brno, CZ)
             use_solar: Enable solar brightness calculations (default: True)
         """
-        self.bridge_ip = bridge_ip
-        self.light_name = light_name
+        import os
+        self.base_url = base_url.rstrip("/")
+        self.token = token or os.environ.get("HASS_TOKEN")
+        self.entity_id = entity_id
         self.min_brightness = max(0.0, min(1.0, min_brightness))
         self.poll_interval = poll_interval
-        self.auto_discover = auto_discover
         self.latitude = latitude
         self.longitude = longitude
         self.use_solar = use_solar and ASTRAL_AVAILABLE
 
         if self.use_solar and not ASTRAL_AVAILABLE:
-            print("[HUE] Warning: Solar brightness requested but astral library not available")
-            print("[HUE] Install with: pip install astral")
+            print("[HA] Warning: Solar brightness requested but astral library not available")
+            print("[HA] Install with: pip install astral")
             self.use_solar = False
 
         # Create LocationInfo object for solar calculations
@@ -66,12 +67,11 @@ class HueBridgeClient:
         else:
             self.location = None
 
-        self.bridge = None
         self._connected = False
         self._running = False
         self._poll_thread = None
         self._lock = threading.Lock()
-        self._brightness_scale = 1.0  # Default to 100% if Hue unavailable
+        self._brightness_scale = 1.0  # Default to 100% if HA unavailable
 
     @property
     def brightness_scale(self) -> float:
@@ -92,114 +92,91 @@ class HueBridgeClient:
 
     def connect(self) -> bool:
         """
-        Connect to Hue bridge (with auto-discovery or manual IP)
+        Verify connection to Home Assistant
 
         Returns:
             True if successful, False otherwise
         """
         try:
-            # Import phue here to provide better error message if missing
-            try:
-                from phue import Bridge
-            except ImportError:
-                print("[HUE] Error: phue library not found")
-                print("[HUE] Install with: pip install phue")
+            if not self.token:
+                print("[HA] Error: No access token provided")
+                print("[HA] Create a long-lived access token in Home Assistant")
+                print("[HA] Profile -> Long-Lived Access Tokens -> Create Token")
+                print("[HA] Then pass it via --ha-token or HASS_TOKEN env var")
                 return False
 
-            # Determine bridge IP
-            if self.bridge_ip is None and self.auto_discover:
-                print("[HUE] Auto-discovering Hue bridge...")
-                discovered_ip = self._discover_bridge()
-                if discovered_ip:
-                    self.bridge_ip = discovered_ip
-                    print(f"[HUE] Discovered bridge at {self.bridge_ip}")
-                else:
-                    print("[HUE] Auto-discovery failed")
-                    return False
-            elif self.bridge_ip is None:
-                print("[HUE] No bridge IP provided and auto-discovery disabled")
-                return False
+            # Verify connectivity by fetching the light entity state
+            print(f"[HA] Connecting to Home Assistant at {self.base_url}...")
+            state = self._get_entity_state()
 
-            # Connect to bridge
-            print(f"[HUE] Connecting to bridge at {self.bridge_ip}...")
-            self.bridge = Bridge(self.bridge_ip)
-
-            # This will prompt to press button if not authenticated
-            # Credentials are saved to ~/.python_hue automatically
-            self.bridge.connect()
-
-            # Verify we can read lights
-            lights = self.bridge.get_light_objects('name')
-            if self.light_name not in lights:
-                print(f"[HUE] Warning: Light '{self.light_name}' not found")
-                print(f"[HUE] Available lights: {list(lights.keys())}")
-                print(f"[HUE] Continuing anyway (will use 100% brightness)")
+            if state is None:
+                print(f"[HA] Warning: Entity '{self.entity_id}' not found")
+                print("[HA] Continuing anyway (will use 100% brightness)")
+            else:
+                attrs = state.get("attributes", {})
+                friendly_name = attrs.get("friendly_name", self.entity_id)
+                current_state = state.get("state", "unknown")
+                print(f"[HA] Found light '{friendly_name}' (currently {current_state})")
 
             with self._lock:
                 self._connected = True
 
-            print(f"[HUE] Connected successfully")
+            print(f"[HA] Connected successfully")
             return True
 
         except Exception as e:
-            print(f"[HUE] Connection failed: {e}")
+            print(f"[HA] Connection failed: {e}")
             with self._lock:
                 self._connected = False
             return False
 
     def disconnect(self):
-        """Disconnect from Hue bridge"""
+        """Disconnect from Home Assistant"""
         with self._lock:
             self._connected = False
-            self.bridge = None
 
     def start_polling(self):
         """Start background polling thread"""
         if self._running:
-            print("[HUE] Polling already running")
+            print("[HA] Polling already running")
             return
 
         self._running = True
         self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._poll_thread.start()
-        print(f"[HUE] Started polling every {self.poll_interval}s")
+        print(f"[HA] Started polling every {self.poll_interval}s")
 
     def stop_polling(self):
         """Stop background polling thread"""
         if not self._running:
             return
 
-        print("[HUE] Stopping polling thread...")
+        print("[HA] Stopping polling thread...")
         self._running = False
 
         if self._poll_thread:
             self._poll_thread.join(timeout=self.poll_interval + 1.0)
             self._poll_thread = None
 
-        print("[HUE] Polling stopped")
+        print("[HA] Polling stopped")
 
-    def _discover_bridge(self) -> Optional[str]:
+    def _get_entity_state(self) -> Optional[dict]:
         """
-        Auto-discover bridge IP using Philips Hue discovery service
+        Fetch the current state of the configured light entity
 
         Returns:
-            Bridge IP address or None if not found
+            State dict (with 'state' and 'attributes') or None if not found
         """
-        try:
-            # Use official Philips Hue discovery service
-            response = requests.get('https://discovery.meethue.com/', timeout=5.0)
-            response.raise_for_status()
-            bridges = response.json()
-
-            if bridges and len(bridges) > 0:
-                return bridges[0]['internalipaddress']
-            else:
-                print("[HUE] No bridges found via discovery service")
-                return None
-
-        except Exception as e:
-            print(f"[HUE] Discovery error: {e}")
+        url = f"{self.base_url}/api/states/{self.entity_id}"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
+        response = requests.get(url, headers=headers, timeout=5.0)
+        if response.status_code == 404:
             return None
+        response.raise_for_status()
+        return response.json()
 
     def _poll_loop(self):
         """Background thread polling loop with error recovery"""
@@ -209,23 +186,23 @@ class HueBridgeClient:
         while self._running:
             try:
                 if self._connected:
-                    # Update brightness from Hue
+                    # Update brightness from Home Assistant
                     self._update_brightness()
                     retry_delay = 1.0  # Reset on success
                 else:
                     # Try to reconnect
-                    print(f"[HUE] Attempting to reconnect...")
+                    print(f"[HA] Attempting to reconnect...")
                     if self.connect():
-                        print(f"[HUE] Reconnected successfully")
+                        print(f"[HA] Reconnected successfully")
                         retry_delay = 1.0
                     else:
-                        print(f"[HUE] Reconnection failed, retry in {retry_delay}s")
+                        print(f"[HA] Reconnection failed, retry in {retry_delay}s")
                         time.sleep(retry_delay)
                         retry_delay = min(retry_delay * 2, max_retry_delay)
                         continue
 
             except Exception as e:
-                print(f"[HUE] Polling error: {e}")
+                print(f"[HA] Polling error: {e}")
                 with self._lock:
                     self._connected = False
                     # Set brightness to 100% (fail-safe)
@@ -236,15 +213,25 @@ class HueBridgeClient:
 
     def _update_brightness(self):
         """
-        Query Hue light brightness and update brightness_scale
+        Query Home Assistant light brightness and update brightness_scale
 
         Raises:
             Exception on error (caught by _poll_loop)
         """
         try:
             # Get light state
-            is_on = self.bridge.get_light(self.light_name, 'on')
-            bri = self.bridge.get_light(self.light_name, 'bri')
+            state = self._get_entity_state()
+
+            if state is None:
+                print(f"[HA] Entity '{self.entity_id}' not available")
+                # Fail-safe: default to 100% brightness
+                with self._lock:
+                    self._brightness_scale = 1.0
+                # Re-raise to trigger reconnection logic
+                raise ValueError(f"Entity '{self.entity_id}' not found")
+
+            is_on = state.get("state", "off") == "on"
+            bri = state.get("attributes", {}).get("brightness", 0)
 
             # Calculate brightness scale
             scale = self._calculate_scale(bri, is_on)
@@ -254,17 +241,11 @@ class HueBridgeClient:
                 self._brightness_scale = scale
 
         except Exception as e:
-            # Check if light not found
+            # Check if entity not found
             if "not found" in str(e).lower() or "not available" in str(e).lower():
-                print(f"[HUE] Light '{self.light_name}' not available")
-                # Try to list available lights for debugging
-                try:
-                    lights = self.bridge.get_light_objects('name')
-                    print(f"[HUE] Available lights: {list(lights.keys())}")
-                except:
-                    pass
+                print(f"[HA] Entity '{self.entity_id}' not available")
             else:
-                print(f"[HUE] Error reading light: {e}")
+                print(f"[HA] Error reading light: {e}")
 
             # Fail-safe: default to 100% brightness
             with self._lock:
@@ -310,43 +291,44 @@ class HueBridgeClient:
             return max(self.min_brightness, min(1.0, scale))
 
         except Exception as e:
-            print(f"[HUE] Error calculating solar brightness: {e}")
+            print(f"[HA] Error calculating solar brightness: {e}")
             return self.min_brightness
 
-    def _calculate_scale(self, hue_bri: int, is_on: bool) -> float:
+    def _calculate_scale(self, light_bri: int, is_on: bool) -> float:
         """
-        Calculate brightness scale from Hue brightness value and solar elevation
+        Calculate brightness scale from light brightness value and solar elevation
 
-        Uses max(hue_brightness, solar_brightness) to combine both sources.
+        Uses max(light_brightness, solar_brightness) to combine both sources.
 
         Args:
-            hue_bri: Hue brightness (1-254, or 0 if off)
+            light_bri: Home Assistant brightness (0-255, or 0/None if off)
             is_on: Light on/off state
 
         Returns:
             Brightness scale (min_brightness to 1.0)
 
         Formula:
-            hue_scale = min_brightness + (1.0 - min_brightness) * (hue_bri / 254)
+            light_scale = min_brightness + (1.0 - min_brightness) * (light_bri / 255)
             solar_scale = calculated from sun elevation
-            final_scale = max(hue_scale, solar_scale)
+            final_scale = max(light_scale, solar_scale)
 
         Examples:
-            - Hue off, night → 0.25 (min_brightness)
-            - Hue off, daytime → solar brightness (e.g., 0.7)
-            - Hue at 50%, night → 0.625
-            - Hue at 100%, any time → 1.0
+            - Light off, night → 0.25 (min_brightness)
+            - Light off, daytime → solar brightness (e.g., 0.7)
+            - Light at 50%, night → 0.625
+            - Light at 100%, any time → 1.0
         """
-        # Calculate Hue light brightness
-        if not is_on or hue_bri == 0:
-            hue_scale = self.min_brightness
+        # Calculate light brightness
+        if not is_on or not light_bri or light_bri == 0:
+            light_scale = self.min_brightness
         else:
-            # Linear interpolation: min + (max - min) * (value / 254)
-            hue_scale = self.min_brightness + (1.0 - self.min_brightness) * (hue_bri / 254.0)
-            hue_scale = max(self.min_brightness, min(1.0, hue_scale))
+            # Home Assistant brightness range is 0-255
+            # Linear interpolation: min + (max - min) * (value / 255)
+            light_scale = self.min_brightness + (1.0 - self.min_brightness) * (light_bri / 255.0)
+            light_scale = max(self.min_brightness, min(1.0, light_scale))
 
         # Calculate solar brightness if enabled
         solar_scale = self._calculate_solar_brightness()
 
         # Return the brighter of the two
-        return max(hue_scale, solar_scale)
+        return max(light_scale, solar_scale)
