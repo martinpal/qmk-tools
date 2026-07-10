@@ -1,0 +1,95 @@
+# =============================================================================
+# QMK Keyboard Overlay - Configuration File
+# =============================================================================
+# This is a sample configuration file. Copy it to config.yaml and adjust the
+# values to match your setup.
+#
+# By default, the overlay looks for config.yaml in the current directory.
+# You can override this with the --config <path> command-line option.
+#
+# Precedence (highest to lowest):
+#   1. Command-line arguments (override everything)
+#   2. Environment variables (for secrets like tokens)
+#   3. config.yaml values
+#   4. Built-in defaults
+#
+# Lines commented out with # show the default value.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Overlay window
+# -----------------------------------------------------------------------------
+overlay:
+  # X position of the overlay window (pixels from left edge)
+  # x: 0
+
+  # Y position of the overlay window (pixels from top edge)
+  # y: 0
+
+  # Keyboard selection.
+  #   - Integer index (1-based) of the keyboard from the detected list
+  #   - "VID:PID" hex string (e.g. "FEED:6060")
+  #   - Omit to auto-select the first detected keyboard
+  # keyboard: 1
+
+# -----------------------------------------------------------------------------
+# Boblight integration - ambient LED lighting feedback based on keyboard layer
+# -----------------------------------------------------------------------------
+boblight:
+  # Enable boblight integration (requires boblightd running)
+  # enabled: false
+
+  # Boblight server hostname/IP
+  # host: localhost
+
+  # Boblight server port
+  # port: 19333
+
+  # Boblight priority. LOWER = higher priority.
+  # Use 255 to disable, boblight-X11 uses 128.
+  # priority: 100
+
+  # Comma-separated list of LED indices to control (e.g. [0, 1, 2, 3, 4, 5]).
+  # Omit or leave null to control all LEDs.
+  # leds: [0, 1, 2, 3, 4, 5]
+
+# -----------------------------------------------------------------------------
+# Home Assistant integration - dynamic brightness scaling
+# -----------------------------------------------------------------------------
+# Scales boblight LED brightness based on a Home Assistant light entity's
+# state combined with solar elevation (time of day).
+# Requires boblight to be enabled.
+home_assistant:
+  # Enable Home Assistant integration
+  # enabled: false
+
+  # Home Assistant base URL
+  # url: http://homeassistant.local:8123
+
+  # Long-lived access token.
+  # Create one in Home Assistant: Profile -> Long-Lived Access Tokens.
+  # Can also be set via the HASS_TOKEN environment variable (recommended for
+  # secrets so the token is not stored in the config file).
+  # token: "eyJhbGciOi..."
+
+  # Light entity_id to monitor (e.g. light.living_room)
+  # entity: light.velke_svetlo_v_obyvaku
+
+  # Minimum boblight brightness when the light is off (0.0 - 1.0)
+  # min_brightness: 0.25
+
+  # Polling interval for Home Assistant state in seconds
+  # poll_interval: 5.0
+
+  # Solar brightness - adjusts brightness based on sun elevation for a natural
+  # daylight curve. Uses max(light_brightness, solar_brightness) so whichever
+  # is brighter wins.
+  solar:
+    # Enable solar brightness calculations
+    # enabled: true
+
+    # Latitude for solar position calculations (Brno, CZ by default)
+    # latitude: 49.19
+
+    # Longitude for solar position calculations (Brno, CZ by default)
+    # longitude: 16.61

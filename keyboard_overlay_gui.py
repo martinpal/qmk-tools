@@ -1463,11 +1463,103 @@ class KeyboardMonitor(threading.Thread):
                 time.sleep(1)
 
 
+def load_config(path: str) -> dict:
+    """Load a YAML config file and return the raw parsed dict."""
+    import yaml
+    with open(path, 'r') as f:
+        return yaml.safe_load(f) or {}
+
+
+def apply_config_defaults(parser, config: dict):
+    """
+    Apply config.yaml values as argparse defaults.
+
+    Only sets defaults for keys present in the config so that CLI arguments
+    (parsed afterwards) still override, and built-in defaults remain for
+    anything not specified in either config or CLI.
+    """
+    # --- overlay ---
+    overlay = config.get('overlay', {}) or {}
+    if 'x' in overlay:
+        parser.set_defaults(x=overlay['x'])
+    if 'y' in overlay:
+        parser.set_defaults(y=overlay['y'])
+    if 'keyboard' in overlay:
+        parser.set_defaults(keyboard=str(overlay['keyboard']))
+
+    # --- boblight ---
+    boblight = config.get('boblight', {}) or {}
+    if 'enabled' in boblight:
+        parser.set_defaults(boblight=boblight['enabled'])
+    if 'host' in boblight:
+        parser.set_defaults(boblight_host=boblight['host'])
+    if 'port' in boblight:
+        parser.set_defaults(boblight_port=boblight['port'])
+    if 'priority' in boblight:
+        parser.set_defaults(boblight_priority=boblight['priority'])
+    if 'leds' in boblight:
+        leds = boblight['leds']
+        # YAML list -> comma-separated string (matching CLI format)
+        if isinstance(leds, list):
+            parser.set_defaults(boblight_leds=','.join(str(l) for l in leds))
+        else:
+            parser.set_defaults(boblight_leds=str(leds))
+
+    # --- home_assistant ---
+    ha = config.get('home_assistant', {}) or {}
+    if 'enabled' in ha:
+        parser.set_defaults(ha=ha['enabled'])
+    if 'url' in ha:
+        parser.set_defaults(ha_url=ha['url'])
+    if 'entity' in ha:
+        parser.set_defaults(ha_entity=ha['entity'])
+    if 'min_brightness' in ha:
+        parser.set_defaults(ha_min_brightness=ha['min_brightness'])
+    if 'poll_interval' in ha:
+        parser.set_defaults(ha_poll_interval=ha['poll_interval'])
+
+    # Token: env var takes precedence over config for security
+    token = os.environ.get('HASS_TOKEN') or ha.get('token')
+    if token:
+        parser.set_defaults(ha_token=token)
+
+    # Solar (nested under home_assistant)
+    solar = ha.get('solar', {}) or {}
+    if 'enabled' in solar:
+        # CLI flag is --ha-no-solar (inverted), config key is solar.enabled
+        parser.set_defaults(ha_no_solar=not solar['enabled'])
+    if 'latitude' in solar:
+        parser.set_defaults(ha_latitude=solar['latitude'])
+    if 'longitude' in solar:
+        parser.set_defaults(ha_longitude=solar['longitude'])
+
+
 def main():
     """Main function"""
     import argparse
 
+    # --- Phase 1: parse --config (and any unknown args) to find config path ---
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument('--config', type=str, default='config.yaml',
+                           help='Path to YAML config file (default: config.yaml)')
+    pre_args, _ = pre_parser.parse_known_args()
+
+    # --- Phase 2: load config and apply as defaults ---
+    config = {}
+    try:
+        config = load_config(pre_args.config)
+        print(f"[CONFIG] Loaded configuration from {pre_args.config}")
+    except FileNotFoundError:
+        # Config file not found is fine - use CLI/built-in defaults only
+        pass
+    except Exception as e:
+        print(f"[CONFIG] Warning: Error loading {pre_args.config}: {e}")
+        print("[CONFIG] Continuing with command-line defaults only")
+
+    # --- Phase 3: full argument parser with config-aware defaults ---
     parser = argparse.ArgumentParser(description="QMK Keyboard Overlay GUI")
+    parser.add_argument('--config', type=str, default='config.yaml',
+                        help='Path to YAML config file (default: config.yaml)')
     parser.add_argument('--keyboard', type=str, help='Keyboard selection: INDEX or VID:PID (e.g., 1 or FEED:6060)')
     parser.add_argument('--x', type=int, default=0, help='X position of window (default: 0)')
     parser.add_argument('--y', type=int, default=0, help='Y position of window (default: 0)')
@@ -1489,6 +1581,10 @@ def main():
     parser.add_argument('--ha-latitude', type=float, default=49.19, help='Latitude for solar calculations (default: 49.19 = Brno, CZ)')
     parser.add_argument('--ha-longitude', type=float, default=16.61, help='Longitude for solar calculations (default: 16.61 = Brno, CZ)')
     parser.add_argument('--ha-no-solar', action='store_true', help='Disable solar brightness calculations (use only Home Assistant light)')
+
+    # Apply config.yaml values as defaults (CLI args will override these)
+    if config:
+        apply_config_defaults(parser, config)
 
     args = parser.parse_args()
 
