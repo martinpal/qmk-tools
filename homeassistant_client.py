@@ -28,6 +28,7 @@ class HomeAssistantClient:
                  base_url: str = "http://homeassistant.local:8123",
                  token: Optional[str] = None,
                  entity_id: str = "light.velke_svetlo_v_obyvaku",
+                 color_entity_id: Optional[str] = None,
                  min_brightness: float = 0.25,
                  poll_interval: float = 5.0,
                  latitude: float = 49.19,
@@ -39,7 +40,8 @@ class HomeAssistantClient:
         Args:
             base_url: Home Assistant base URL (e.g. http://homeassistant.local:8123)
             token: Long-lived access token (or set via HASS_TOKEN env var)
-            entity_id: Light entity_id to monitor (e.g. light.living_room)
+            entity_id: Light entity_id to monitor for brightness (e.g. light.living_room)
+            color_entity_id: Light entity_id to control color on (defaults to entity_id)
             min_brightness: Minimum brightness when light is off (0.0-1.0, default: 0.25)
             poll_interval: Polling frequency in seconds (default: 5.0)
             latitude: Latitude for solar calculations (default: 49.19 = Brno, CZ)
@@ -50,6 +52,7 @@ class HomeAssistantClient:
         self.base_url = base_url.rstrip("/")
         self.token = token or os.environ.get("HASS_TOKEN")
         self.entity_id = entity_id
+        self.color_entity_id = color_entity_id or entity_id
         self.min_brightness = max(0.0, min(1.0, min_brightness))
         self.poll_interval = poll_interval
         self.latitude = latitude
@@ -160,14 +163,18 @@ class HomeAssistantClient:
 
         print("[HA] Polling stopped")
 
-    def _get_entity_state(self) -> Optional[dict]:
+    def _get_entity_state(self, entity_id: Optional[str] = None) -> Optional[dict]:
         """
-        Fetch the current state of the configured light entity
+        Fetch the current state of a light entity
+
+        Args:
+            entity_id: Entity to query (defaults to the brightness entity)
 
         Returns:
             State dict (with 'state' and 'attributes') or None if not found
         """
-        url = f"{self.base_url}/api/states/{self.entity_id}"
+        entity = entity_id or self.entity_id
+        url = f"{self.base_url}/api/states/{entity}"
         headers = {
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
@@ -177,6 +184,97 @@ class HomeAssistantClient:
             return None
         response.raise_for_status()
         return response.json()
+
+    def _call_service(self, domain: str, service: str, data: dict):
+        """Call a Home Assistant service via the REST API"""
+        url = f"{self.base_url}/api/services/{domain}/{service}"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
+        response = requests.post(url, headers=headers, json=data, timeout=5.0)
+        response.raise_for_status()
+        return response.json()
+
+    def get_light_color_state(self) -> Optional[dict]:
+        """
+        Capture the current state of the color light for later restoration.
+
+        Returns:
+            Dict with 'state', 'brightness', 'rgb_color', 'color_temp',
+            or None if the entity can't be read.
+        """
+        try:
+            state = self._get_entity_state(self.color_entity_id)
+            if state is None:
+                print(f"[HA] Color entity '{self.color_entity_id}' not found")
+                return None
+
+            attrs = state.get("attributes", {})
+            return {
+                "state": state.get("state", "off"),
+                "brightness": attrs.get("brightness"),
+                "rgb_color": attrs.get("rgb_color"),
+                "color_temp": attrs.get("color_temp"),
+            }
+        except Exception as e:
+            print(f"[HA] Error reading color light state: {e}")
+            return None
+
+    def set_light_color(self, r: int, g: int, b: int, brightness: Optional[int] = None):
+        """
+        Set the color light to an RGB color.
+
+        Args:
+            r: Red 0-255
+            g: Green 0-255
+            b: Blue 0-255
+            brightness: Optional brightness 0-255 (if None, keep current)
+        """
+        try:
+            data = {
+                "entity_id": self.color_entity_id,
+                "rgb_color": [r, g, b],
+            }
+            if brightness is not None:
+                data["brightness"] = brightness
+            self._call_service("light", "turn_on", data)
+            print(f"[HA] Set light color to RGB({r}, {g}, {b})")
+        except Exception as e:
+            print(f"[HA] Error setting light color: {e}")
+
+    def restore_light_state(self, saved_state: dict):
+        """
+        Restore a previously captured light state (from get_light_color_state).
+
+        Args:
+            saved_state: Dict from get_light_color_state()
+        """
+        try:
+            if saved_state.get("state") == "off":
+                self._call_service("light", "turn_off", {
+                    "entity_id": self.color_entity_id
+                })
+                print(f"[HA] Restored light state: off")
+                return
+
+            data = {"entity_id": self.color_entity_id}
+
+            # Prefer rgb_color, fall back to color_temp, then just turn on
+            if saved_state.get("rgb_color") is not None:
+                data["rgb_color"] = saved_state["rgb_color"]
+            elif saved_state.get("color_temp") is not None:
+                data["color_temp"] = saved_state["color_temp"]
+
+            if saved_state.get("brightness") is not None:
+                data["brightness"] = saved_state["brightness"]
+
+            self._call_service("light", "turn_on", data)
+            print(f"[HA] Restored light state: on, "
+                  f"rgb={saved_state.get('rgb_color')}, "
+                  f"brightness={saved_state.get('brightness')}")
+        except Exception as e:
+            print(f"[HA] Error restoring light state: {e}")
 
     def _poll_loop(self):
         """Background thread polling loop with error recovery"""

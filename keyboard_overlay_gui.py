@@ -224,6 +224,8 @@ class KeyboardOverlay(QWidget):
 
         # Home Assistant integration (set later by main)
         self.ha_client = None
+        self.ha_color_enabled = False
+        self.ha_saved_light_state = None  # Captured before layer color change
 
         # Thread communication
         self.update_signal = LayerUpdateSignal()
@@ -791,6 +793,22 @@ class KeyboardOverlay(QWidget):
             layer_color_name = self.layer_info.get(layer_num, {}).get("color", "WHITE")
             layer_color_hex = self._qcolor_to_hex(self.qt_colors[layer_color_name])
             self.gnome_bridge.update_layer(layer_name, layer_color_hex)
+
+        # Update Home Assistant light color if enabled
+        if self.ha_color_enabled and self.ha_client:
+            if layer_num == 0:
+                # Returning to base layer - restore saved light state
+                if self.ha_saved_light_state is not None:
+                    self.ha_client.restore_light_state(self.ha_saved_light_state)
+                    self.ha_saved_light_state = None
+            else:
+                # Non-base layer - save current state (if not already saved) and set layer color
+                if self.ha_saved_light_state is None:
+                    self.ha_saved_light_state = self.ha_client.get_light_color_state()
+
+                layer_color_name = self.layer_info.get(layer_num, {}).get("color", "WHITE")
+                color = self.boblight_colors.get(layer_color_name, QColor(255, 255, 255))
+                self.ha_client.set_light_color(color.red(), color.green(), color.blue())
 
         # Update boblight if available
         # Strategy: Stay connected, use 'set light <name> use on/off' for per-LED transparency
@@ -1533,6 +1551,13 @@ def apply_config_defaults(parser, config: dict):
     if 'longitude' in solar:
         parser.set_defaults(ha_longitude=solar['longitude'])
 
+    # Color sync (nested under home_assistant)
+    color = ha.get('color', {}) or {}
+    if 'enabled' in color:
+        parser.set_defaults(ha_color=color['enabled'])
+    if 'entity' in color:
+        parser.set_defaults(ha_color_entity=color['entity'])
+
 
 def main():
     """Main function"""
@@ -1581,6 +1606,10 @@ def main():
     parser.add_argument('--ha-latitude', type=float, default=49.19, help='Latitude for solar calculations (default: 49.19 = Brno, CZ)')
     parser.add_argument('--ha-longitude', type=float, default=16.61, help='Longitude for solar calculations (default: 16.61 = Brno, CZ)')
     parser.add_argument('--ha-no-solar', action='store_true', help='Disable solar brightness calculations (use only Home Assistant light)')
+
+    # Home Assistant color sync arguments
+    parser.add_argument('--ha-color', action='store_true', help='Enable Home Assistant light color sync with keyboard layer')
+    parser.add_argument('--ha-color-entity', type=str, default=None, help='Home Assistant light entity_id to control color on (default: same as --ha-entity)')
 
     # Apply config.yaml values as defaults (CLI args will override these)
     if config:
@@ -1727,6 +1756,7 @@ def main():
             base_url=args.ha_url,
             token=args.ha_token,
             entity_id=args.ha_entity,
+            color_entity_id=args.ha_color_entity,
             min_brightness=args.ha_min_brightness,
             poll_interval=args.ha_poll_interval,
             latitude=args.ha_latitude,
@@ -1737,10 +1767,14 @@ def main():
         if ha_client.connect():
             ha_client.start_polling()
             overlay.ha_client = ha_client
+            overlay.ha_color_enabled = args.ha_color
             print(f"[HA] Integration enabled, monitoring '{args.ha_entity}'")
             print(f"[HA] Min brightness: {args.ha_min_brightness*100:.0f}%")
             if not args.ha_no_solar:
                 print(f"[HA] Solar brightness enabled (location: {args.ha_latitude:.2f}°N, {args.ha_longitude:.2f}°E)")
+            if args.ha_color:
+                color_entity = args.ha_color_entity or args.ha_entity
+                print(f"[HA] Color sync enabled, controlling '{color_entity}'")
         else:
             print("[HA] Warning: Failed to connect to Home Assistant, continuing without HA")
             ha_client = None

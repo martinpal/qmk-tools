@@ -28,3 +28,6 @@ ENV/
 # Temporary files
 *.tmp
 *.log
+
+# Local configuration (contains secrets like tokens - do not commit)
+config.yaml

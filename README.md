@@ -12,6 +12,7 @@ Collection of tools for QMK keyboards, including a real-time keyboard overlay GU
 - **GNOME Shell integration** - Layer indicator in the top bar
 - **Boblight integration** - Ambient LED lighting feedback based on keyboard layer (optional)
 - **Home Assistant integration** - Dynamic LED brightness scaling based on a Home Assistant light (optional)
+- **Home Assistant light color sync** - Sync a Home Assistant light's color to the active keyboard layer (optional)
 - **Corsair mouse monitor** - Tracks mouse battery and DPI changes
 
 ### Supported Keyboards
@@ -214,6 +215,35 @@ sudo python3 keyboard_overlay_gui.py --boblight --ha --ha-poll-interval 3.0
 - Daytime (noon), light at 50% → ~100% (solar wins)
 - Sunrise/sunset, light off → 25% (minimum)
 - Sunrise/sunset, light at 100% → 100% (HA wins)
+
+### Home Assistant Light Color Sync (Optional)
+
+Sync a Home Assistant light's color to the active keyboard layer color. When a non-base layer is activated, the light is set to that layer's color. When returning to the base layer, the light's previous state (on/off, brightness, color) is restored.
+
+Can use the same light as the brightness monitoring entity, or a different light.
+
+```yaml
+# In config.yaml:
+home_assistant:
+  color:
+    enabled: true
+    # entity: light.bedroom_lamp  # defaults to the entity above
+```
+
+Or via command line:
+```bash
+# Same light as brightness monitoring
+sudo python3 keyboard_overlay_gui.py --boblight --ha --ha-color
+
+# Different light for color
+sudo python3 keyboard_overlay_gui.py --boblight --ha --ha-color --ha-color-entity light.bedroom_lamp
+```
+
+**How it works:**
+- On first non-base layer activation: captures the light's current state (on/off, brightness, RGB color or color temp)
+- Sets the light to the layer's color (using `boblight_colors` for fully saturated values)
+- On return to base layer: restores the saved state (turns off if it was off, restores color and brightness if it was on)
+- If layer changes between non-base layers, the saved state is preserved (only captured once per base-layer excursion)
 
 ## Components
 

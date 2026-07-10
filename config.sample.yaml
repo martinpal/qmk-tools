@@ -93,3 +93,14 @@ home_assistant:
 
     # Longitude for solar position calculations (Brno, CZ by default)
     # longitude: 16.61
+
+  # Light color sync - sets a Home Assistant light to the active keyboard
+  # layer's color when a non-base layer is activated, and restores the
+  # previous state when returning to the base layer.
+  color:
+    # Enable layer color sync to a Home Assistant light
+    # enabled: false
+
+    # Light entity_id to control color on.
+    # Defaults to the same entity as 'entity' above if omitted.
+    # entity: light.living_room
