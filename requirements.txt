@@ -17,6 +17,7 @@ python-xlib>=0.31
 PyYAML>=6.0
 
 # Home Assistant integration (optional, for --ha flag)
+websocket-client>=1.6.0
 requests>=2.28.0
 
 # Solar calculations for time-of-day brightness
