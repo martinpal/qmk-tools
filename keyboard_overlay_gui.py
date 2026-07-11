@@ -226,6 +226,8 @@ class KeyboardOverlay(QWidget):
         self.ha_client = None
         self.ha_color_enabled = False
         self.ha_saved_light_state = None  # Captured before layer color change
+        self.ha_saved_light_time = 0  # Timestamp when state was saved
+        self.ha_save_expiry = 1.0  # Seconds before saved state expires
 
         # Thread communication
         self.update_signal = LayerUpdateSignal()
@@ -797,14 +799,19 @@ class KeyboardOverlay(QWidget):
         # Update Home Assistant light color if enabled
         if self.ha_color_enabled and self.ha_client:
             if layer_num == 0:
-                # Returning to base layer - restore saved light state
+                # Returning to base layer - restore the most recently active
+                # light mode (scene, sun-following, dark, etc.)
                 if self.ha_saved_light_state is not None:
-                    self.ha_client.restore_light_state(self.ha_saved_light_state)
+                    self.ha_client.restore_light_mode()
                     self.ha_saved_light_state = None
             else:
-                # Non-base layer - save current state (if not already saved) and set layer color
-                if self.ha_saved_light_state is None:
+                # Non-base layer - save current state only if not already saved
+                # or if the saved state has expired (default 1 second)
+                now = time.time()
+                if (self.ha_saved_light_state is None or
+                        now - self.ha_saved_light_time > self.ha_save_expiry):
                     self.ha_saved_light_state = self.ha_client.get_light_color_state()
+                    self.ha_saved_light_time = now
 
                 layer_color_name = self.layer_info.get(layer_num, {}).get("color", "WHITE")
                 color = self.boblight_colors.get(layer_color_name, QColor(255, 255, 255))

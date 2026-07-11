@@ -95,8 +95,8 @@ home_assistant:
     # longitude: 16.61
 
   # Light color sync - sets a Home Assistant light to the active keyboard
-  # layer's color when a non-base layer is activated, and restores the
-  # previous state when returning to the base layer.
+  # layer's color when a non-base layer is activated, and triggers an
+  # automation when returning to the base layer to re-sync lights.
   color:
     # Enable layer color sync to a Home Assistant light
     # enabled: false
@@ -104,3 +104,8 @@ home_assistant:
     # Light entity_id to control color on.
     # Defaults to the same entity as 'entity' above if omitted.
     # entity: light.living_room
+
+    # When returning to the base layer, qmk-tools queries Home Assistant for
+    # the most recently activated scene, script, automation, or tag and
+    # re-triggers it. This restores the correct light mode (sun-following,
+    # dark scene, etc.) without any configuration here.

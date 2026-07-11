@@ -78,7 +78,7 @@ class HomeAssistantClient:
 
         self._connected = False
         self._running = False
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # Reentrant - _update_brightness_from_state called within lock
         self._msg_lock = threading.Lock()
         self._msg_id = 0
         self._brightness_scale = 1.0  # Default to 100% if HA unavailable
@@ -295,6 +295,23 @@ class HomeAssistantClient:
             "color_temp": attrs.get("color_temp"),
         }
 
+    def _optimistic_cache_update(self, entity_id: str, state: str, attrs: dict):
+        """Immediately update the local cache to reflect a command we just sent.
+
+        This prevents race conditions where get_light_color_state() reads
+        stale cache data before the WebSocket state_changed event arrives.
+        """
+        cached = {
+            "entity_id": entity_id,
+            "state": state,
+            "attributes": attrs,
+        }
+        with self._lock:
+            self._state_cache[entity_id] = cached
+            # Also update brightness if this is the monitored entity
+            if entity_id == self.entity_id:
+                self._update_brightness_from_state(cached)
+
     def set_light_color(self, r: int, g: int, b: int, brightness: Optional[int] = None):
         """Set the color light to an RGB color via WebSocket."""
         service_data = {
@@ -309,6 +326,17 @@ class HomeAssistantClient:
             "service": "turn_on",
             "service_data": service_data,
         })
+
+        # Optimistically update cache so a rapid save after this
+        # doesn't capture the layer color as the "original" state
+        with self._lock:
+            old = self._state_cache.get(self.color_entity_id, {})
+        old_attrs = dict(old.get("attributes", {}))
+        old_attrs["rgb_color"] = [r, g, b]
+        if brightness is not None:
+            old_attrs["brightness"] = brightness
+        self._optimistic_cache_update(self.color_entity_id, "on", old_attrs)
+
         print(f"[HA] Set light color to RGB({r}, {g}, {b})")
 
     def restore_light_state(self, saved_state: dict):
@@ -320,6 +348,7 @@ class HomeAssistantClient:
                 "service": "turn_off",
                 "service_data": {"entity_id": self.color_entity_id},
             })
+            self._optimistic_cache_update(self.color_entity_id, "off", {})
             print("[HA] Restored light state: off")
             return
 
@@ -337,9 +366,154 @@ class HomeAssistantClient:
             "service": "turn_on",
             "service_data": service_data,
         })
+
+        # Optimistically update cache with the restored state so a rapid
+        # subsequent layer activation saves the correct "original" state
+        restored_attrs = {}
+        if saved_state.get("rgb_color") is not None:
+            restored_attrs["rgb_color"] = saved_state["rgb_color"]
+        if saved_state.get("color_temp") is not None:
+            restored_attrs["color_temp"] = saved_state["color_temp"]
+        if saved_state.get("brightness") is not None:
+            restored_attrs["brightness"] = saved_state["brightness"]
+        self._optimistic_cache_update(self.color_entity_id, "on", restored_attrs)
+
         print(f"[HA] Restored light state: on, "
               f"rgb={saved_state.get('rgb_color')}, "
               f"brightness={saved_state.get('brightness')}")
+
+    def trigger_automation(self, entity_id: str):
+        """Trigger a Home Assistant automation or script via WebSocket.
+
+        Detects whether the entity_id starts with 'script.' or 'automation.'
+        and calls the appropriate service.
+        """
+        if entity_id.startswith("script."):
+            self._send({
+                "type": "call_service",
+                "domain": "script",
+                "service": "turn_on",
+                "service_data": {"entity_id": entity_id},
+            })
+            print(f"[HA] Triggered script: {entity_id}")
+        else:
+            self._send({
+                "type": "call_service",
+                "domain": "automation",
+                "service": "trigger",
+                "service_data": {"entity_id": entity_id},
+            })
+            print(f"[HA] Triggered automation: {entity_id}")
+
+    def restore_light_mode(self):
+        """
+        Find and re-trigger the most recently activated light-controlling entity.
+
+        Queries HA for all scenes, scripts, automations, and tags, finds the one
+        with the most recent last_changed timestamp, and re-triggers it. This
+        restores the correct light mode (scene, sun-following, dark, etc.)
+        without qmk-tools needing to know about specific modes.
+
+        Falls back to restore_light_state() if no triggerable entity is found.
+        """
+        try:
+            # Entity domains that can control lights when triggered
+            LIGHT_CONTROL_DOMAINS = ("scene.", "script.", "automation.", "tag.")
+
+            with self._lock:
+                candidates = []
+                for eid, state in self._state_cache.items():
+                    if not eid.startswith(LIGHT_CONTROL_DOMAINS):
+                        continue
+                    # Skip automations that are off (disabled)
+                    if eid.startswith("automation.") and state.get("state") != "on":
+                        continue
+                    # Skip scripts that are "off" (idle) unless they have a timestamp
+                    # Scripts have state "off" when not running, but last_changed
+                    # tells us when they were last activated
+                    last_changed = state.get("last_changed", "")
+                    if last_changed:
+                        candidates.append((last_changed, eid, state))
+
+            if not candidates:
+                print("[HA] No light-controlling entities found for mode restore")
+                return
+
+            # Sort by last_changed descending (most recent first)
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            ts, eid, state = candidates[0]
+            friendly = state.get("attributes", {}).get("friendly_name", eid)
+            print(f"[HA] Most recent light mode: {eid} ({friendly}) at {ts}")
+
+            # Re-trigger based on domain
+            if eid.startswith("scene."):
+                self._send({
+                    "type": "call_service",
+                    "domain": "scene",
+                    "service": "turn_on",
+                    "service_data": {"entity_id": eid},
+                })
+                print(f"[HA] Re-activated scene: {eid}")
+            elif eid.startswith("script."):
+                self._send({
+                    "type": "call_service",
+                    "domain": "script",
+                    "service": "turn_on",
+                    "service_data": {"entity_id": eid},
+                })
+                print(f"[HA] Re-triggered script: {eid}")
+            elif eid.startswith("automation."):
+                self._send({
+                    "type": "call_service",
+                    "domain": "automation",
+                    "service": "trigger",
+                    "service_data": {"entity_id": eid, "skip_condition": True},
+                })
+                print(f"[HA] Re-triggered automation: {eid}")
+            elif eid.startswith("tag."):
+                # Tags trigger automations via state changes. Find the automation
+                # that watches this tag and trigger it instead.
+                tag_eid = eid
+                tag_ts = ts
+                # Look for an automation whose trigger references this tag
+                # We can't inspect automation triggers via API, but we can look
+                # for automations that changed around the same time as the tag
+                with self._lock:
+                    best_auto = None
+                    best_diff = float('inf')
+                    for a_eid, a_state in self._state_cache.items():
+                        if not a_eid.startswith("automation."):
+                            continue
+                        if a_state.get("state") != "on":
+                            continue
+                        a_ts = a_state.get("last_changed", "")
+                        if not a_ts:
+                            continue
+                        # Find automation that fired closest to the tag scan time
+                        try:
+                            from datetime import datetime as dt
+                            tag_time = dt.fromisoformat(ts.replace("Z", "+00:00"))
+                            auto_time = dt.fromisoformat(a_ts.replace("Z", "+00:00"))
+                            diff = abs((tag_time - auto_time).total_seconds())
+                            if diff < best_diff and diff < 5.0:
+                                best_diff = diff
+                                best_auto = a_eid
+                        except (ValueError, TypeError):
+                            continue
+
+                if best_auto:
+                    self._send({
+                        "type": "call_service",
+                        "domain": "automation",
+                        "service": "trigger",
+                        "service_data": {"entity_id": best_auto, "skip_condition": True},
+                    })
+                    print(f"[HA] Tag {tag_eid} -> triggered automation: {best_auto}")
+                else:
+                    print(f"[HA] Tag {tag_eid} scanned but no matching automation found")
+
+        except Exception as e:
+            print(f"[HA] Error restoring light mode: {e}")
 
     # --- Brightness calculation ---
 
