@@ -89,6 +89,9 @@ class HomeAssistantClient:
         self._state_cache = {}  # entity_id -> state dict
         self._connect_event = threading.Event()
 
+        # Adaptive lighting support (detected at connect time)
+        self._adaptive_lighting_switches = []  # List of switch entity_ids
+
     @property
     def brightness_scale(self) -> float:
         """Current brightness scale (thread-safe, 0.0-1.0)"""
@@ -237,6 +240,9 @@ class HomeAssistantClient:
                         print(f"[HA] Warning: Entity '{self.entity_id}' not found")
                     if self.color_entity_id not in self._state_cache:
                         print(f"[HA] Warning: Color entity '{self.color_entity_id}' not found")
+
+                # Detect adaptive-lighting switches
+                self._detect_adaptive_lighting()
             elif not data.get("success", True):
                 error = data.get("error", {}).get("message", "unknown")
                 print(f"[HA] Command failed: {error}")
@@ -405,20 +411,79 @@ class HomeAssistantClient:
             })
             print(f"[HA] Triggered automation: {entity_id}")
 
+    def _detect_adaptive_lighting(self):
+        """Detect adaptive-lighting switches from the HA state cache."""
+        with self._lock:
+            switches = [eid for eid in self._state_cache
+                        if eid.startswith("switch.adaptive_lighting_")
+                        and not eid.endswith("_sleep_mode")
+                        and not eid.endswith("_adapt_color")
+                        and not eid.endswith("_adapt_brightness")]
+        if switches:
+            self._adaptive_lighting_switches = switches
+            print(f"[HA] Adaptive Lighting detected: {switches}")
+
+    def _clear_adaptive_lighting_manual_control(self):
+        """Clear the 'manually controlled' flag on our light for all active
+        adaptive-lighting switches, then force-apply current settings.
+
+        This is needed because setting a light color via light.turn_on causes
+        adaptive-lighting to mark the light as 'manually controlled' and pause
+        adaptation. Clearing the flag and applying forces it to resume.
+        """
+        if not self._adaptive_lighting_switches:
+            return
+
+        for switch_eid in self._adaptive_lighting_switches:
+            # Check if the switch is on
+            with self._lock:
+                sw_state = self._state_cache.get(switch_eid, {})
+            if sw_state.get("state") != "on":
+                continue
+
+            # Clear manual control flag for our light
+            self._send({
+                "type": "call_service",
+                "domain": "adaptive_lighting",
+                "service": "set_manual_control",
+                "service_data": {
+                    "entity_id": switch_eid,
+                    "lights": [self.color_entity_id],
+                    "manual_control": False,
+                },
+            })
+
+            # Force apply current adaptive settings to our light
+            self._send({
+                "type": "call_service",
+                "domain": "adaptive_lighting",
+                "service": "apply",
+                "service_data": {
+                    "entity_id": switch_eid,
+                    "lights": [self.color_entity_id],
+                },
+            })
+            print(f"[HA] Cleared manual control and applied adaptive-lighting: {switch_eid}")
+
     def restore_light_mode(self):
         """
         Find and re-trigger the most recently activated light-controlling entity.
 
-        Queries HA for all scenes, scripts, automations, and tags, finds the one
-        with the most recent last_changed timestamp, and re-triggers it. This
-        restores the correct light mode (scene, sun-following, dark, etc.)
-        without qmk-tools needing to know about specific modes.
+        Queries HA for all scenes, scripts, automations, tags, and switches,
+        finds the one with the most recent last_changed timestamp, and
+        re-triggers it. This restores the correct light mode (adaptive-lighting,
+        sun-following, dark scene, etc.) without qmk-tools needing to know about
+        specific modes.
 
-        Falls back to restore_light_state() if no triggerable entity is found.
+        For adaptive-lighting: clears the 'manually controlled' flag that was
+        set when qmk-tools changed the light color, then forces re-application
+        of the current adaptive settings.
         """
         try:
             # Entity domains that can control lights when triggered
-            LIGHT_CONTROL_DOMAINS = ("scene.", "script.", "automation.", "tag.")
+            LIGHT_CONTROL_DOMAINS = (
+                "scene.", "script.", "automation.", "tag.", "switch."
+            )
 
             with self._lock:
                 candidates = []
@@ -428,15 +493,23 @@ class HomeAssistantClient:
                     # Skip automations that are off (disabled)
                     if eid.startswith("automation.") and state.get("state") != "on":
                         continue
-                    # Skip scripts that are "off" (idle) unless they have a timestamp
-                    # Scripts have state "off" when not running, but last_changed
-                    # tells us when they were last activated
+                    # Skip non-light switches (only include adaptive-lighting)
+                    if eid.startswith("switch.") and "adaptive_lighting" not in eid:
+                        continue
+                    # Skip adaptive-lighting sub-switches (sleep mode, adapt color, etc.)
+                    if eid.startswith("switch.adaptive_lighting_") and any(
+                        eid.endswith(suffix) for suffix in
+                        ("_sleep_mode", "_adapt_color", "_adapt_brightness")
+                    ):
+                        continue
                     last_changed = state.get("last_changed", "")
                     if last_changed:
                         candidates.append((last_changed, eid, state))
 
             if not candidates:
                 print("[HA] No light-controlling entities found for mode restore")
+                # Still try to clear adaptive-lighting manual control
+                self._clear_adaptive_lighting_manual_control()
                 return
 
             # Sort by last_changed descending (most recent first)
@@ -454,6 +527,7 @@ class HomeAssistantClient:
                     "service_data": {"entity_id": eid},
                 })
                 print(f"[HA] Re-activated scene: {eid}")
+
             elif eid.startswith("script."):
                 self._send({
                     "type": "call_service",
@@ -462,6 +536,7 @@ class HomeAssistantClient:
                     "service_data": {"entity_id": eid},
                 })
                 print(f"[HA] Re-triggered script: {eid}")
+
             elif eid.startswith("automation."):
                 self._send({
                     "type": "call_service",
@@ -470,14 +545,17 @@ class HomeAssistantClient:
                     "service_data": {"entity_id": eid, "skip_condition": True},
                 })
                 print(f"[HA] Re-triggered automation: {eid}")
+
+            elif eid.startswith("switch.adaptive_lighting"):
+                # Adaptive-lighting switch was the most recent mode change.
+                # Clear manual control and force-apply current settings.
+                self._clear_adaptive_lighting_manual_control()
+
             elif eid.startswith("tag."):
                 # Tags trigger automations via state changes. Find the automation
-                # that watches this tag and trigger it instead.
+                # that was most recently triggered around the tag scan time.
                 tag_eid = eid
                 tag_ts = ts
-                # Look for an automation whose trigger references this tag
-                # We can't inspect automation triggers via API, but we can look
-                # for automations that changed around the same time as the tag
                 with self._lock:
                     best_auto = None
                     best_diff = float('inf')
@@ -486,13 +564,13 @@ class HomeAssistantClient:
                             continue
                         if a_state.get("state") != "on":
                             continue
-                        a_ts = a_state.get("last_changed", "")
+                        # Use last_triggered from attributes (not last_changed)
+                        a_ts = a_state.get("attributes", {}).get("last_triggered", "")
                         if not a_ts:
                             continue
-                        # Find automation that fired closest to the tag scan time
                         try:
                             from datetime import datetime as dt
-                            tag_time = dt.fromisoformat(ts.replace("Z", "+00:00"))
+                            tag_time = dt.fromisoformat(tag_ts.replace("Z", "+00:00"))
                             auto_time = dt.fromisoformat(a_ts.replace("Z", "+00:00"))
                             diff = abs((tag_time - auto_time).total_seconds())
                             if diff < best_diff and diff < 5.0:
@@ -511,6 +589,22 @@ class HomeAssistantClient:
                     print(f"[HA] Tag {tag_eid} -> triggered automation: {best_auto}")
                 else:
                     print(f"[HA] Tag {tag_eid} scanned but no matching automation found")
+                    # Fallback: clear adaptive-lighting if present
+                    self._clear_adaptive_lighting_manual_control()
+
+            else:
+                # Generic switch - toggle off/on
+                self._send({
+                    "type": "call_service",
+                    "domain": "switch",
+                    "service": "turn_on",
+                    "service_data": {"entity_id": eid},
+                })
+                print(f"[HA] Re-activated switch: {eid}")
+
+            # Always clear adaptive-lighting manual control as a safety net,
+            # in case adaptive-lighting is running alongside another mode
+            self._clear_adaptive_lighting_manual_control()
 
         except Exception as e:
             print(f"[HA] Error restoring light mode: {e}")
