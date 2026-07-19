@@ -573,7 +573,7 @@ class HomeAssistantClient:
                             tag_time = dt.fromisoformat(tag_ts.replace("Z", "+00:00"))
                             auto_time = dt.fromisoformat(a_ts.replace("Z", "+00:00"))
                             diff = abs((tag_time - auto_time).total_seconds())
-                            if diff < best_diff and diff < 5.0:
+                            if diff < best_diff and diff < 60.0:
                                 best_diff = diff
                                 best_auto = a_eid
                         except (ValueError, TypeError):
