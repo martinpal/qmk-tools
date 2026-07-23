@@ -229,6 +229,10 @@ class KeyboardOverlay(QWidget):
         self.ha_saved_light_time = 0  # Timestamp when state was saved
         self.ha_save_expiry = 1.0  # Seconds before saved state expires
 
+        # MQTT layer-state publishing (set later by main)
+        self.mqtt_client = None
+        self.mqtt_enabled = False
+
         # Thread communication
         self.update_signal = LayerUpdateSignal()
         self.update_signal.layer_changed.connect(self.on_layer_changed)
@@ -816,6 +820,19 @@ class KeyboardOverlay(QWidget):
                 layer_color_name = self.layer_info.get(layer_num, {}).get("color", "WHITE")
                 color = self.boblight_colors.get(layer_color_name, QColor(255, 255, 255))
                 self.ha_client.set_light_color(color.red(), color.green(), color.blue())
+
+        # Publish layer state to MQTT for Home Assistant to react to
+        if self.mqtt_enabled and self.mqtt_client:
+            layer_name = self.layer_info.get(layer_num, {}).get("name", f"Layer{layer_num}")
+            layer_color_name = self.layer_info.get(layer_num, {}).get("color", "WHITE")
+            color = self.boblight_colors.get(layer_color_name, QColor(255, 255, 255))
+            self.mqtt_client.publish_layer_state(
+                layer_num=layer_num,
+                layer_name=layer_name,
+                color_name=layer_color_name,
+                color_hex=self._qcolor_to_hex(color),
+                is_base_layer=(layer_num == 0),
+            )
 
         # Update boblight if available
         # Strategy: Stay connected, use 'set light <name> use on/off' for per-LED transparency
@@ -1565,6 +1582,28 @@ def apply_config_defaults(parser, config: dict):
     if 'entity' in color:
         parser.set_defaults(ha_color_entity=color['entity'])
 
+    # --- mqtt ---
+    mqtt_cfg = config.get('mqtt', {}) or {}
+    if 'enabled' in mqtt_cfg:
+        parser.set_defaults(mqtt=mqtt_cfg['enabled'])
+    if 'host' in mqtt_cfg:
+        parser.set_defaults(mqtt_broker=mqtt_cfg['host'])
+    if 'port' in mqtt_cfg:
+        parser.set_defaults(mqtt_port=mqtt_cfg['port'])
+    if 'transport' in mqtt_cfg:
+        parser.set_defaults(mqtt_transport=mqtt_cfg['transport'])
+    if 'tls' in mqtt_cfg:
+        parser.set_defaults(mqtt_tls=mqtt_cfg['tls'])
+    if 'username' in mqtt_cfg:
+        parser.set_defaults(mqtt_username=mqtt_cfg['username'])
+    if 'device_id' in mqtt_cfg:
+        parser.set_defaults(mqtt_device_id=mqtt_cfg['device_id'])
+
+    # Password: env var takes precedence over config for security
+    mqtt_password = os.environ.get('MQTT_PASSWORD') or mqtt_cfg.get('password')
+    if mqtt_password:
+        parser.set_defaults(mqtt_password=mqtt_password)
+
 
 def main():
     """Main function"""
@@ -1617,6 +1656,16 @@ def main():
     # Home Assistant color sync arguments
     parser.add_argument('--ha-color', action='store_true', help='Enable Home Assistant light color sync with keyboard layer')
     parser.add_argument('--ha-color-entity', type=str, default=None, help='Home Assistant light entity_id to control color on (default: same as --ha-entity)')
+
+    # MQTT layer-state publishing arguments
+    parser.add_argument('--mqtt', action='store_true', help='Publish keyboard layer state to MQTT for Home Assistant to react to')
+    parser.add_argument('--mqtt-broker', type=str, default='homeassistant.local', help='MQTT broker host (default: homeassistant.local)')
+    parser.add_argument('--mqtt-port', type=int, default=1883, help='MQTT broker port (default: 1883)')
+    parser.add_argument('--mqtt-transport', type=str, default='tcp', choices=['tcp', 'websockets'], help='MQTT transport (default: tcp)')
+    parser.add_argument('--mqtt-tls', action='store_true', help='Use TLS for the MQTT connection')
+    parser.add_argument('--mqtt-username', type=str, default=None, help='MQTT broker username')
+    parser.add_argument('--mqtt-password', type=str, default=os.environ.get('MQTT_PASSWORD'), help='MQTT broker password (default: MQTT_PASSWORD env var)')
+    parser.add_argument('--mqtt-device-id', type=str, default='keyboard1', help='Device id used in MQTT topics, e.g. qmk/<device-id>/layer (default: keyboard1)')
 
     # Apply config.yaml values as defaults (CLI args will override these)
     if config:
@@ -1787,6 +1836,35 @@ def main():
             ha_client = None
     overlay.ha_client = ha_client
 
+    # Setup MQTT layer-state publishing if enabled
+    mqtt_client_instance = None
+    if args.mqtt:
+        try:
+            import mqtt_client as mqtt_client_module
+        except ImportError:
+            print("Error: MQTT integration requested but mqtt_client module not available")
+            print("Install with: pip install paho-mqtt")
+            return 1
+
+        print(f"\n[MQTT] Initializing MQTT layer-state publishing...")
+        mqtt_client_instance = mqtt_client_module.MQTTHomeAssistantClient(
+            mqtt_broker=args.mqtt_broker,
+            mqtt_port=args.mqtt_port,
+            mqtt_transport=args.mqtt_transport,
+            mqtt_username=args.mqtt_username,
+            mqtt_password=args.mqtt_password,
+            use_tls=args.mqtt_tls,
+            device_id=args.mqtt_device_id,
+        )
+
+        if mqtt_client_instance.connect():
+            overlay.mqtt_client = mqtt_client_instance
+            overlay.mqtt_enabled = True
+            print(f"[MQTT] Publishing layer state to 'qmk/{args.mqtt_device_id}/layer'")
+        else:
+            print("[MQTT] Warning: Failed to connect to MQTT broker, continuing without MQTT")
+            mqtt_client_instance = None
+
     # Load keyboard layers
     overlay.load_layers()
 
@@ -1812,6 +1890,8 @@ def main():
         if ha_client:
             ha_client.stop_polling()
             ha_client.disconnect()
+        if mqtt_client_instance:
+            mqtt_client_instance.disconnect()
 
     return ret if 'ret' in locals() else 0
 

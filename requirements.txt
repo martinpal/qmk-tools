@@ -22,3 +22,6 @@ requests>=2.28.0
 
 # Solar calculations for time-of-day brightness
 astral>=3.2
+
+# MQTT layer-state publishing (optional, for --mqtt flag)
+paho-mqtt>=1.6.0

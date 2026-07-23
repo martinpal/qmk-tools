@@ -109,3 +109,41 @@ home_assistant:
     # the most recently activated scene, script, automation, or tag and
     # re-triggers it. This restores the correct light mode (sun-following,
     # dark scene, etc.) without any configuration here.
+
+# -----------------------------------------------------------------------------
+# MQTT integration - publish keyboard layer state as events
+# -----------------------------------------------------------------------------
+# Publishes the active layer (name + color) to a retained MQTT topic on every
+# layer change, instead of qmk-tools commanding a light directly. A Home
+# Assistant automation subscribes to the topic and decides how to react
+# (apply the color, scale it, ignore it, restore a scene on base layer, etc).
+mqtt:
+  # Enable MQTT layer-state publishing
+  # enabled: false
+
+  # MQTT broker host
+  # host: homeassistant.local
+
+  # MQTT broker port (1883 for plain TCP, 8883 for TLS, 443 if fronted by a
+  # websocket proxy)
+  # port: 1883
+
+  # Transport: "tcp" (raw MQTT) or "websockets" (MQTT-over-WebSocket, useful
+  # when the broker is only reachable through an HTTPS reverse proxy)
+  # transport: tcp
+
+  # Use TLS for the connection (typically paired with transport: websockets
+  # on port 443, or port 8883 for raw TLS)
+  # tls: false
+
+  # Broker username, if the broker requires authentication
+  # username: my-mqtt-user
+
+  # Broker password. Can also be set via the MQTT_PASSWORD environment
+  # variable (recommended for secrets so it's not stored in the config file).
+  # password: "CHANGE_ME"
+
+  # Device id used in the published topics: qmk/<device_id>/layer and
+  # qmk/<device_id>/availability. Distinguishes multiple keyboards on the
+  # same broker.
+  # device_id: keyboard1
