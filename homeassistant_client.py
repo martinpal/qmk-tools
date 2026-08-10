@@ -41,7 +41,9 @@ class HomeAssistantClient:
                  poll_interval: float = 5.0,
                  latitude: float = 49.19,
                  longitude: float = 16.61,
-                 use_solar: bool = True):
+                 use_solar: bool = True,
+                 layer_override_boolean: str = "input_boolean.qmk_override_active",
+                 layer_snapshot_scene: str = "scene.qmk_light_snapshot"):
         """
         Initialize Home Assistant client
 
@@ -55,6 +57,11 @@ class HomeAssistantClient:
             latitude: Latitude for solar calculations (default: 49.19 = Brno, CZ)
             longitude: Longitude for solar calculations (default: 16.61 = Brno, CZ)
             use_solar: Enable solar brightness calculations (default: True)
+            layer_override_boolean: input_boolean entity toggled on/off by an
+                external MQTT-driven layer-color-sync automation while it has
+                temporarily recolored a light for the active layer
+            layer_snapshot_scene: scene entity that same automation snapshots
+                the light's pre-layer-color state into, to restore later
         """
         self.base_url = base_url.rstrip("/")
         self.token = token or os.environ.get("HASS_TOKEN")
@@ -65,6 +72,8 @@ class HomeAssistantClient:
         self.latitude = latitude
         self.longitude = longitude
         self.use_solar = use_solar and ASTRAL_AVAILABLE
+        self.layer_override_boolean = layer_override_boolean
+        self.layer_snapshot_scene = layer_snapshot_scene
 
         if self.use_solar and not ASTRAL_AVAILABLE:
             print("[HA] Warning: Solar brightness requested but astral library not available")
@@ -387,6 +396,73 @@ class HomeAssistantClient:
         print(f"[HA] Restored light state: on, "
               f"rgb={saved_state.get('rgb_color')}, "
               f"brightness={saved_state.get('brightness')}")
+
+    def adjust_brightness(self, entity_id: str, step_pct: int):
+        """Step a light's brightness up or down by a relative percentage.
+
+        Uses Home Assistant's brightness_step_pct, which is computed
+        server-side against the light's actual current brightness, so
+        repeated calls (e.g. from a held key) stay correct without needing
+        a local brightness cache. Turns the light on if it was off.
+
+        Args:
+            entity_id: Light entity_id to adjust
+            step_pct: Percentage to step, positive to brighten, negative to dim
+        """
+        self._send({
+            "type": "call_service",
+            "domain": "light",
+            "service": "turn_on",
+            "service_data": {
+                "entity_id": entity_id,
+                "brightness_step_pct": step_pct,
+            },
+        })
+        print(f"[HA] Adjusted brightness of {entity_id} by {step_pct:+d}%")
+
+    def layer_color_override_active(self) -> bool:
+        """Whether an external layer-color-sync automation currently has a
+        light recolored for the active layer (tracked via its own
+        input_boolean, using the cached state pushed to us over the WS
+        subscription - no extra round trip needed)."""
+        with self._lock:
+            state = self._state_cache.get(self.layer_override_boolean)
+        return bool(state and state.get("state") == "on")
+
+    def cancel_layer_color_override(self):
+        """Restore a light from the layer-color snapshot scene and clear the
+        override flag, so a later layer exit doesn't re-apply the (now
+        stale) snapshot on top of a brightness change made here.
+
+        Mirrors the restore branch of the external "layer color sync"
+        automation, but triggered immediately on the first brightness step
+        instead of on layer exit, so brightness changes give direct visual
+        feedback instead of adjusting the layer-tinted color. No-ops if the
+        override isn't currently active.
+        """
+        if not self.layer_color_override_active():
+            return
+        self._send({
+            "type": "call_service",
+            "domain": "scene",
+            "service": "turn_on",
+            "service_data": {"entity_id": self.layer_snapshot_scene},
+        })
+        self._send({
+            "type": "call_service",
+            "domain": "scene",
+            "service": "delete",
+            "service_data": {"entity_id": self.layer_snapshot_scene},
+        })
+        self._send({
+            "type": "call_service",
+            "domain": "input_boolean",
+            "service": "turn_off",
+            "service_data": {"entity_id": self.layer_override_boolean},
+        })
+        # Optimistic cache update so rapid repeats don't re-send the restore
+        self._optimistic_cache_update(self.layer_override_boolean, "off", {})
+        print("[HA] Cancelled layer-color override, restored pre-layer light state")
 
     def trigger_automation(self, entity_id: str):
         """Trigger a Home Assistant automation or script via WebSocket.

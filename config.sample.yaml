@@ -110,6 +110,33 @@ home_assistant:
     # re-triggers it. This restores the correct light mode (sun-following,
     # dark scene, etc.) without any configuration here.
 
+  # Brightness control keys - bind specific physical keys, on specific
+  # layers, to step a Home Assistant light's brightness up or down.
+  # Requires 'enabled: true' above. Holding a bound key repeats the step
+  # every 'repeat_interval' seconds until released; a single tap fires once.
+  #
+  # Find a key's (row, col): run
+  #   python3 list_via_keyboards_usb.py --monitor
+  # and press the physical key - it prints "Key [row,col]: PRESSED".
+  #
+  # 'entity' accepts either a single entity_id or a list, to step several
+  # lights together from one key.
+  #
+  # brightness_keys:
+  #   - layer: 2                        # layer this binding is active on
+  #     row: 0                          # matrix row of the physical key
+  #     col: 0                          # matrix col of the physical key
+  #     entity: light.bedroom_lamp      # defaults to 'entity' above if omitted
+  #     direction: up                   # "up" or "down"
+  #     step: 10                        # percent per step (default: 10)
+  #     repeat_interval: 0.2            # seconds between repeats while held (default: 0.2)
+  #   - layer: 2
+  #     row: 0
+  #     col: 1
+  #     entity: [light.bedroom_lamp, light.hallway_lamp]
+  #     direction: down
+  #     step: 10
+
 # -----------------------------------------------------------------------------
 # MQTT integration - publish keyboard layer state as events
 # -----------------------------------------------------------------------------

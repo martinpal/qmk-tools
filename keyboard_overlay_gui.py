@@ -1211,7 +1211,7 @@ class HotkeyMonitor(threading.Thread):
 class KeyboardMonitor(threading.Thread):
     """Monitor keyboard layer changes via USB"""
 
-    def __init__(self, keyboard, overlay: KeyboardOverlay, rows: int, cols: int):
+    def __init__(self, keyboard, overlay: KeyboardOverlay, rows: int, cols: int, brightness_keys: list = None):
         super().__init__(daemon=True)
         self.keyboard = keyboard
         self.overlay = overlay
@@ -1220,6 +1220,12 @@ class KeyboardMonitor(threading.Thread):
         self.running = True
         self.error_count = 0
         self.max_errors = 10  # Reconnect after 10 consecutive errors
+
+        # Brightness control key bindings: list of dicts with
+        # layer, row, col, entity, direction ("up"/"down"), step (%), repeat_interval (s)
+        self.brightness_keys = brightness_keys or []
+        # (row, col) -> time.time() of last fired step, for held-key repeat
+        self.brightness_key_state = {}
 
         # Store keyboard identification for reconnection
         self.keyboard_vid = keyboard.device.idVendor
@@ -1356,6 +1362,7 @@ class KeyboardMonitor(threading.Thread):
         self.default_layer = 0
         self.active_layer_stack = {}
         self.pressed_keys = {}
+        self.brightness_key_state = {}
 
         # Pause monitoring while reloading layers to avoid USB command conflicts
         self.error_count = self.max_errors + 1
@@ -1442,6 +1449,15 @@ class KeyboardMonitor(threading.Thread):
                                     # Reset pressed state when released
                                     self.on_top_key_pressed = False
 
+                            # Check for brightness control keys
+                            for bk in self.brightness_keys:
+                                if row == bk['row'] and col == bk['col']:
+                                    if pressed and self.current_layer == bk['layer']:
+                                        self._fire_brightness_step(bk)
+                                        self.brightness_key_state[(row, col)] = time.time()
+                                    elif not pressed:
+                                        self.brightness_key_state.pop((row, col), None)
+
                             if pressed:
                                 # Key pressed - check current layer
                                 # Bounds check for layer data (may be reloading after reconnection)
@@ -1497,12 +1513,48 @@ class KeyboardMonitor(threading.Thread):
                         self.default_layer
                     )
 
+                # Repeat brightness steps for keys still held down
+                if self.brightness_key_state:
+                    now = time.time()
+                    for (row, col), last_fired in list(self.brightness_key_state.items()):
+                        bk = self._find_brightness_key(row, col, self.current_layer)
+                        if bk is None:
+                            continue
+                        if now - last_fired >= bk.get('repeat_interval', 0.2):
+                            self._fire_brightness_step(bk)
+                            self.brightness_key_state[(row, col)] = now
+
                 self.prev_state = current_state
                 time.sleep(0.007)  # ~150Hz polling (was 0.02 = 50Hz, 3x faster)
 
             except Exception as e:
                 print(f"Error in keyboard monitor: {e}")
                 time.sleep(1)
+
+    def _find_brightness_key(self, row: int, col: int, layer: int) -> Optional[dict]:
+        """Look up a brightness key binding matching (row, col, layer), if any."""
+        for bk in self.brightness_keys:
+            if bk['row'] == row and bk['col'] == col and bk['layer'] == layer:
+                return bk
+        return None
+
+    def _fire_brightness_step(self, bk: dict):
+        """Send one brightness step to Home Assistant for a brightness key binding.
+
+        A binding may target multiple entities (e.g. several lights stepped
+        together from one key) - 'entities' is always a list by the time it
+        reaches here.
+        """
+        ha_client = self.overlay.ha_client
+        if ha_client is None:
+            return
+        # Give immediate visual feedback: if a layer-color-sync automation has
+        # tinted a light for the active layer, snap it back to its normal
+        # state first so the brightness step is visible on the real color.
+        ha_client.cancel_layer_color_override()
+        step_pct = bk['step'] if bk['direction'] == 'up' else -bk['step']
+        for entity_id in bk['entities']:
+            ha_client.adjust_brightness(entity_id, step_pct)
 
 
 def load_config(path: str) -> dict:
@@ -1836,6 +1888,34 @@ def main():
             ha_client = None
     overlay.ha_client = ha_client
 
+    # Parse brightness control key bindings (requires HA integration)
+    brightness_keys = []
+    raw_brightness_keys = (config.get('home_assistant', {}) or {}).get('brightness_keys') or []
+    if raw_brightness_keys and not ha_client:
+        print("[HA] Warning: brightness_keys configured but Home Assistant integration is not enabled/connected, ignoring")
+    elif raw_brightness_keys:
+        default_entity = args.ha_entity
+        for i, raw in enumerate(raw_brightness_keys):
+            try:
+                direction = raw.get('direction', 'up')
+                if direction not in ('up', 'down'):
+                    raise ValueError(f"direction must be 'up' or 'down', got {direction!r}")
+                entity = raw.get('entity', default_entity)
+                entities = entity if isinstance(entity, list) else [entity]
+                brightness_keys.append({
+                    'layer': int(raw['layer']),
+                    'row': int(raw['row']),
+                    'col': int(raw['col']),
+                    'entities': entities,
+                    'direction': direction,
+                    'step': int(raw.get('step', 10)),
+                    'repeat_interval': float(raw.get('repeat_interval', 0.2)),
+                })
+            except (KeyError, ValueError, TypeError) as e:
+                print(f"[HA] Warning: skipping invalid brightness_keys[{i}] entry: {e}")
+        if brightness_keys:
+            print(f"[HA] Brightness control enabled for {len(brightness_keys)} key binding(s)")
+
     # Setup MQTT layer-state publishing if enabled
     mqtt_client_instance = None
     if args.mqtt:
@@ -1869,7 +1949,7 @@ def main():
     overlay.load_layers()
 
     # Start keyboard monitoring thread
-    keyboard_monitor = KeyboardMonitor(keyboard, overlay, rows, cols)
+    keyboard_monitor = KeyboardMonitor(keyboard, overlay, rows, cols, brightness_keys=brightness_keys)
     keyboard_monitor.start()
 
     print("\nOverlay window active!")
