@@ -9,10 +9,31 @@ Works cooperatively with ckb-next GUI - uses dedicated notification
 node to avoid conflicts.
 """
 
+import glob
 import threading
 import time
 import os
 from typing import Callable, Dict, List, Optional
+
+
+M65_ULTRA_PRODUCT_ID = "1b9e"
+
+
+def find_m65_ultra_device() -> Optional[str]:
+    """Find the ckb-next device path for the Corsair M65 RGB Ultra by USB
+    product id, since the ckb device index isn't guaranteed stable.
+
+    Returns:
+        Path like '/dev/input/ckb1', or None if not found.
+    """
+    for path in glob.glob('/dev/input/ckb*'):
+        try:
+            with open(f'{path}/productid') as f:
+                if f.read().strip().lower() == M65_ULTRA_PRODUCT_ID:
+                    return path
+        except FileNotFoundError:
+            continue  # ckb0 is the root control node, has no productid
+    return None
 
 
 class CorsairMouseMonitor:
@@ -230,6 +251,32 @@ class CorsairMouseMonitor:
                         print(f"Error in dpi_change callback: {e}")
             except (ValueError, IndexError):
                 pass
+
+    def bind(self, pairs: Dict[str, str]) -> bool:
+        """Live-rebind keys via ckb-next. pairs: {source_key: target_key},
+        e.g. {'wheelup': 'volup', 'wheeldn': 'voldn'}.
+
+        IMPORTANT: pairs are joined with spaces, not commas - ckb-next's
+        command parser only supports commas on the LEFT side of a single
+        pair. A comma between two full pairs corrupts the second pair's
+        target and the daemon silently no-ops. See command.c readcmd().
+
+        Returns True if the command was written successfully. This does NOT
+        guarantee the daemon accepted every key name - unknown names are
+        also silently ignored by the daemon.
+        """
+        if not pairs:
+            return True
+        spec = ' '.join(f'{src}:{dst}' for src, dst in pairs.items())
+        try:
+            with open(self.cmd_path, 'w') as cmd:
+                cmd.write('active\n')
+                cmd.write(f'bind {spec}\n')
+                cmd.flush()
+            return True
+        except Exception as e:
+            print(f"Error sending bind command: {e}")
+            return False
 
     def set_rgb(self, zone: str, color: str) -> bool:
         """
