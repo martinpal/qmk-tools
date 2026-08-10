@@ -233,6 +233,11 @@ class KeyboardOverlay(QWidget):
         self.mqtt_client = None
         self.mqtt_enabled = False
 
+        # Mouse layer remap (set later by main)
+        self.mouse_client = None
+        self.mouse_remap_layers = []       # [{'layer': int, 'remap': {src: dst}, 'restore': {src: src}}, ...]
+        self.mouse_remap_active_layer = None   # layer number currently remapped, or None
+
         # Thread communication
         self.update_signal = LayerUpdateSignal()
         self.update_signal.layer_changed.connect(self.on_layer_changed)
@@ -833,6 +838,20 @@ class KeyboardOverlay(QWidget):
                 color_hex=self._qcolor_to_hex(color),
                 is_base_layer=(layer_num == 0),
             )
+
+        # Apply/restore mouse remap bound to the active layer
+        if self.mouse_client and self.mouse_remap_layers:
+            matched = next((mr for mr in self.mouse_remap_layers
+                             if mr['layer'] == layer_num), None)
+
+            if matched is not None and self.mouse_remap_active_layer != matched['layer']:
+                if self.mouse_client.bind(matched['remap']):
+                    self.mouse_remap_active_layer = matched['layer']
+            elif matched is None and self.mouse_remap_active_layer is not None:
+                prev = next((mr for mr in self.mouse_remap_layers
+                              if mr['layer'] == self.mouse_remap_active_layer), None)
+                if prev and self.mouse_client.bind(prev['restore']):
+                    self.mouse_remap_active_layer = None
 
         # Update boblight if available
         # Strategy: Stay connected, use 'set light <name> use on/off' for per-LED transparency
@@ -1945,6 +1964,44 @@ def main():
             print("[MQTT] Warning: Failed to connect to MQTT broker, continuing without MQTT")
             mqtt_client_instance = None
 
+    # Setup mouse layer remap integration if enabled
+    mouse_client = None
+    mouse_remap_layers = []
+    raw_mouse_remap = config.get('mouse_remap', {}) or {}
+    if raw_mouse_remap.get('enabled'):
+        import corsair_mouse_monitor
+
+        device_path = raw_mouse_remap.get('device') or corsair_mouse_monitor.find_m65_ultra_device()
+        if not device_path:
+            print("[MOUSE] Warning: mouse_remap enabled but no M65 Ultra found under /dev/input/ckb*, continuing without it")
+        else:
+            mouse_client = corsair_mouse_monitor.CorsairMouseMonitor(device_path=device_path)
+            print(f"[MOUSE] Layer remap enabled, using {device_path}")
+
+            seen_layers = set()
+            for i, raw in enumerate(raw_mouse_remap.get('layers') or []):
+                try:
+                    layer = int(raw['layer'])
+                    remap = {str(k): str(v) for k, v in dict(raw['remap']).items()}
+                    if not remap:
+                        raise ValueError("remap must have at least one key:target pair")
+                    if layer in seen_layers:
+                        print(f"[MOUSE] Warning: mouse_remap.layers[{i}] duplicate layer {layer}, ignoring")
+                        continue
+                    seen_layers.add(layer)
+                    mouse_remap_layers.append({
+                        'layer': layer,
+                        'remap': remap,
+                        'restore': {src: src for src in remap},
+                    })
+                except (KeyError, ValueError, TypeError) as e:
+                    print(f"[MOUSE] Warning: skipping invalid mouse_remap.layers[{i}] entry: {e}")
+            if mouse_remap_layers:
+                print(f"[MOUSE] {len(mouse_remap_layers)} layer remap binding(s) configured")
+
+    overlay.mouse_client = mouse_client
+    overlay.mouse_remap_layers = mouse_remap_layers
+
     # Load keyboard layers
     overlay.load_layers()
 
@@ -1972,6 +2029,11 @@ def main():
             ha_client.disconnect()
         if mqtt_client_instance:
             mqtt_client_instance.disconnect()
+        if mouse_client and overlay.mouse_remap_active_layer is not None:
+            active = next((mr for mr in mouse_remap_layers
+                            if mr['layer'] == overlay.mouse_remap_active_layer), None)
+            if active:
+                mouse_client.bind(active['restore'])
 
     return ret if 'ret' in locals() else 0
 

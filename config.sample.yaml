@@ -174,3 +174,33 @@ mqtt:
   # qmk/<device_id>/availability. Distinguishes multiple keyboards on the
   # same broker.
   # device_id: keyboard1
+
+# -----------------------------------------------------------------------------
+# Mouse layer remap - Corsair M65 RGB Ultra wheel/button remapping per layer
+# -----------------------------------------------------------------------------
+# Live-rebinds the mouse's scroll wheel (or buttons) via ckb-next while a
+# specific keyboard layer is active, reverting as soon as any other layer
+# becomes active. Requires ckb-next-daemon running with the M65 RGB Ultra
+# connected (see ckb-m65-rgb-ultra repo - no daemon changes needed).
+mouse_remap:
+  # Enable mouse layer remap
+  # enabled: false
+
+  # Explicit ckb-next device directory, e.g. /dev/input/ckb1.
+  # Omit to auto-detect the M65 RGB Ultra by USB product id (1b9e).
+  # device: /dev/input/ckb1
+
+  # List of per-layer remaps. Each entry applies 'remap' while the given
+  # layer is the active layer, and restores every remapped key to its
+  # identity (unremapped) binding as soon as a different layer becomes
+  # active.
+  #
+  # Key names come from ckb-next's keymap (src/daemon/keymap.c in the
+  # ckb-m65-rgb-ultra repo): wheelup/wheeldn (scroll wheel), volup/voldn
+  # (system volume), mouse1..mouse8, dpiup, dpidn, sniper.
+  #
+  # layers:
+  #   - layer: 2                 # "Lower" layer
+  #     remap:
+  #       wheelup: volup
+  #       wheeldn: voldn
