@@ -245,6 +245,45 @@ sudo python3 keyboard_overlay_gui.py --boblight --ha --ha-color --ha-color-entit
 - On return to base layer: restores the saved state (turns off if it was off, restores color and brightness if it was on)
 - If layer changes between non-base layers, the saved state is preserved (only captured once per base-layer excursion)
 
+### Brightness Control Keys (Optional)
+
+Use specific keys, on specific layers, as brightness up/down controls for one or more Home Assistant lights. Requires the base Home Assistant integration (`--ha`) to be enabled.
+
+```yaml
+# In config.yaml:
+home_assistant:
+  enabled: true
+  brightness_keys:
+    - layer: 2
+      row: 0
+      col: 0
+      entity: light.bedroom_lamp
+      direction: up
+      step: 10
+    - layer: 2
+      row: 0
+      col: 1
+      entity: light.bedroom_lamp
+      direction: down
+      step: 10
+```
+
+**Finding a key's row/col:**
+```bash
+python3 list_via_keyboards_usb.py --monitor
+```
+Press the physical key you want to bind - it prints `Key [row,col]: PRESSED`. On split keyboards the row printed already accounts for which half the key is on (matches what `row` should be in the config).
+
+**How it works:**
+- Each binding matches a physical key (`row`, `col`) only while a given `layer` is active
+- Tapping the key sends one relative brightness step (`brightness_step_pct` via Home Assistant), so it works whether the light is dim, bright, or off
+- Holding the key repeats the step every `repeat_interval` seconds (default: 0.2s) until released, like a real dimmer
+- Multiple bindings can target different entities, layers, or keys independently
+- `entity` accepts a single entity_id or a list, to step several lights together from one key
+- `entity` defaults to the `home_assistant.entity` monitored light if omitted
+
+**Interaction with layer color sync:** if you're using the MQTT-based "QMK Layer Light Sync" HA automation (see [Layer Color Sync](#home-assistant-light-color-sync-optional) below) to tint a light with the active layer's color, the first brightness step after entering a layer restores that light to its pre-layer-color state (via the automation's own `scene.qmk_light_snapshot` / `input_boolean.qmk_override_active` bookkeeping) before applying the step. This gives immediate visual feedback on the light's real color/brightness instead of dimming it while still tinted, and it also clears the override flag so returning to the base layer doesn't undo the brightness change you just made.
+
 ## Components
 
 ### keyboard_overlay_gui.py
