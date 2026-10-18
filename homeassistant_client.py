@@ -430,36 +430,29 @@ class HomeAssistantClient:
         return bool(state and state.get("state") == "on")
 
     def cancel_layer_color_override(self):
-        """Restore a light from the layer-color snapshot scene and clear the
-        override flag, so a later layer exit doesn't re-apply the (now
-        stale) snapshot on top of a brightness change made here.
+        """Cancel the layer-color override and restore whatever should
+        actually be showing, so a later layer exit doesn't re-apply a stale
+        override on top of a brightness change made here.
 
-        Mirrors the restore branch of the external "layer color sync"
-        automation, but triggered immediately on the first brightness step
-        instead of on layer exit, so brightness changes give direct visual
-        feedback instead of adjusting the layer-tinted color. No-ops if the
-        override isn't currently active.
+        Triggered immediately on the first brightness step instead of on
+        layer exit, so brightness changes give direct visual feedback instead
+        of adjusting the layer-tinted color. No-ops if the override isn't
+        currently active.
+
+        Delegates to script.milliways_qmk_cancel_light_override on the HA
+        side rather than reimplementing the restore here -- this used to
+        hand-roll its own scene.turn_on/scene.delete sequence against
+        scene.qmk_light_snapshot, which silently broke 2026-09-21 when the
+        HA-side "QMK Layer Light Sync" automation was rewritten to restore
+        from input_text.light_manual_state instead and stopped ever creating
+        that scene: every brightness-step key press was then corrupting the
+        light with a stale/nonexistent scene restore right before stepping
+        brightness. Routing both callers through the one shared HA script is
+        the actual fix -- don't reintroduce a second copy of this logic here.
         """
         if not self.layer_color_override_active():
             return
-        self._send({
-            "type": "call_service",
-            "domain": "scene",
-            "service": "turn_on",
-            "service_data": {"entity_id": self.layer_snapshot_scene},
-        })
-        self._send({
-            "type": "call_service",
-            "domain": "scene",
-            "service": "delete",
-            "service_data": {"entity_id": self.layer_snapshot_scene},
-        })
-        self._send({
-            "type": "call_service",
-            "domain": "input_boolean",
-            "service": "turn_off",
-            "service_data": {"entity_id": self.layer_override_boolean},
-        })
+        self.trigger_automation("script.milliways_qmk_cancel_light_override")
         # Optimistic cache update so rapid repeats don't re-send the restore
         self._optimistic_cache_update(self.layer_override_boolean, "off", {})
         print("[HA] Cancelled layer-color override, restored pre-layer light state")
