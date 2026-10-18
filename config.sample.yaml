@@ -205,6 +205,26 @@ mouse_remap:
   #       wheelup: volup
   #       wheeldn: voldn
 
+  # RGB layer color sync - mirrors the Home Assistant light color sync, but
+  # for the mouse's own LEDs. On the base layer (and any layer listed in
+  # exclude_layers), the mouse's normal hardware-driven RGB profile/
+  # animations play, same as if this feature didn't exist. On any other
+  # layer, all mouse LEDs are set to that layer's color (the same palette
+  # boblight/GNOME/HA color sync already use).
+  #
+  # Note: while a layer is colored, the mouse is in ckb-next's software-
+  # controlled mode, which pauses its own profile animations (this is how
+  # the daemon works, not a bug) - they resume the instant you return to
+  # the base layer or an excluded layer.
+  rgb:
+    # Enable RGB layer color sync
+    # enabled: false
+
+    # Layer numbers that should NOT be colored - the mouse keeps its normal
+    # hardware animations there too, same as the base layer. Typically the
+    # "Game" layer, so RGB software-mode doesn't engage while gaming.
+    # exclude_layers: [1]
+
 # -----------------------------------------------------------------------------
 # Key usage heatmap - append-only log of every key press/release
 # -----------------------------------------------------------------------------

@@ -238,6 +238,16 @@ class KeyboardOverlay(QWidget):
         self.mouse_remap_layers = []       # [{'layer': int, 'remap': {src: dst}, 'restore': {src: src}}, ...]
         self.mouse_remap_active_layer = None   # layer number currently remapped, or None
 
+        # Mouse RGB layer color sync (set later by main)
+        self.mouse_rgb_enabled = False
+        self.mouse_rgb_exclude_layers = set()  # layer numbers that keep hardware animations (in addition to base layer 0)
+        self.mouse_rgb_active_layer = None     # layer number the mouse LEDs are currently colored for, or None
+
+        # Shared pause/resume state for mouse remap + RGB (both need
+        # ckb-next's GUI/animation processes paused to reliably take effect)
+        self.mouse_override_active = False     # True while we hold exclusive control (paused ckb-next)
+        self.mouse_override_paused_pids = []   # PIDs paused for the current override
+
         # Thread communication
         self.update_signal = LayerUpdateSignal()
         self.update_signal.layer_changed.connect(self.on_layer_changed)
@@ -839,6 +849,29 @@ class KeyboardOverlay(QWidget):
                 is_base_layer=(layer_num == 0),
             )
 
+        # Mouse remap and RGB color sync both need exclusive control of the
+        # device to reliably stick: ckb-next's own GUI/animation processes
+        # continuously re-assert their own state (RGB frames, and evidently
+        # button bindings too) at ~20-40Hz, so a one-shot bind()/set_rgb()
+        # call loses the race unless those processes are paused first. Pause
+        # ONCE, before either feature sends anything, covering both - if we
+        # only paused around the RGB call (as a first pass at this got
+        # wrong), the remap's bind() above would already have lost its race
+        # by the time RGB's pause() ran, since a remapped layer isn't
+        # necessarily also a colored layer. Resume happens only after BOTH
+        # features have finished acting (including any restore-to-identity
+        # bind), once neither wants control any more.
+        mouse_wants_override = False
+        if self.mouse_client:
+            if self.mouse_remap_layers and any(mr['layer'] == layer_num for mr in self.mouse_remap_layers):
+                mouse_wants_override = True
+            if self.mouse_rgb_enabled and layer_num != 0 and layer_num not in self.mouse_rgb_exclude_layers:
+                mouse_wants_override = True
+
+        if self.mouse_client and mouse_wants_override and not self.mouse_override_active:
+            self.mouse_override_paused_pids = self.mouse_client.pause_animations()
+            self.mouse_override_active = True
+
         # Apply/restore mouse remap bound to the active layer
         if self.mouse_client and self.mouse_remap_layers:
             matched = next((mr for mr in self.mouse_remap_layers
@@ -852,6 +885,43 @@ class KeyboardOverlay(QWidget):
                               if mr['layer'] == self.mouse_remap_active_layer), None)
                 if prev and self.mouse_client.bind(prev['restore']):
                     self.mouse_remap_active_layer = None
+
+        # Mirror the mouse's RGB to the active layer's color, same as the
+        # Home Assistant light color sync. Layer 0 and any excluded layer
+        # (e.g. Game) keep the mouse's normal ckb-next-managed animation. We
+        # deliberately never call idle(): the animation processes don't
+        # re-send 'active' themselves, so idle() would strand them in
+        # hardware mode permanently instead of letting them resume.
+        if self.mouse_client and self.mouse_rgb_enabled:
+            if layer_num != 0 and layer_num not in self.mouse_rgb_exclude_layers:
+                if self.mouse_rgb_active_layer != layer_num:
+                    layer_color_name = self.layer_info.get(layer_num, {}).get("color", "WHITE")
+                    color = self.boblight_colors.get(layer_color_name, QColor(255, 255, 255))
+                    hex_color = self._qcolor_to_hex(color).lstrip('#')
+                    # Target the logo+wheel zones explicitly ('back,wheel' in
+                    # this fork's keymap - see the M65-Ultra-specific
+                    # keymap_patch.c override: 'back' -> LED_MOUSE (Logo),
+                    # 'wheel' -> LED_MOUSE+1 (Wheel). This product-specific
+                    # patch takes priority over keymap.c's generic zone
+                    # table, where 'front'/'back' name completely different
+                    # zones - using those names here would (and did) target
+                    # the wrong LEDs. Rather than 'all': the M65 Ultra's 3rd
+                    # zone (DPI indicator, LED_DPI) gets force-overwritten
+                    # with the current DPI stage's configured color on every
+                    # 'active' call (dpi.c, updatedpi()) regardless of what
+                    # 'rgb all' just set it to - sending 'all' produces a DPI
+                    # LED that silently disagrees with the other two. Leaving
+                    # it alone also keeps it doing its actual job (showing
+                    # DPI stage).
+                    if self.mouse_client.set_rgb('back,wheel', hex_color):
+                        self.mouse_rgb_active_layer = layer_num
+            elif self.mouse_rgb_active_layer is not None:
+                self.mouse_rgb_active_layer = None
+
+        if self.mouse_client and not mouse_wants_override and self.mouse_override_active:
+            self.mouse_client.resume_animations(self.mouse_override_paused_pids)
+            self.mouse_override_paused_pids = []
+            self.mouse_override_active = False
 
         # Update boblight if available
         # Strategy: Stay connected, use 'set light <name> use on/off' for per-LED transparency
@@ -1976,6 +2046,8 @@ def main():
     # Setup mouse layer remap integration if enabled
     mouse_client = None
     mouse_remap_layers = []
+    mouse_rgb_enabled = False
+    mouse_rgb_exclude_layers = set()
     raw_mouse_remap = config.get('mouse_remap', {}) or {}
     if raw_mouse_remap.get('enabled'):
         import corsair_mouse_monitor
@@ -2008,8 +2080,23 @@ def main():
             if mouse_remap_layers:
                 print(f"[MOUSE] {len(mouse_remap_layers)} layer remap binding(s) configured")
 
+            # RGB layer color sync (mirrors the HA light color sync: colors
+            # the mouse LEDs to the active layer, restores hardware
+            # animations on base layer and any excluded layer)
+            raw_mouse_rgb = raw_mouse_remap.get('rgb', {}) or {}
+            if raw_mouse_rgb.get('enabled'):
+                mouse_rgb_enabled = True
+                for l in raw_mouse_rgb.get('exclude_layers') or []:
+                    try:
+                        mouse_rgb_exclude_layers.add(int(l))
+                    except (ValueError, TypeError):
+                        print(f"[MOUSE] Warning: skipping invalid rgb.exclude_layers entry: {l!r}")
+                print(f"[MOUSE] RGB layer color sync enabled, excluding layer(s) {sorted(mouse_rgb_exclude_layers) or 'none'}")
+
     overlay.mouse_client = mouse_client
     overlay.mouse_remap_layers = mouse_remap_layers
+    overlay.mouse_rgb_enabled = mouse_rgb_enabled
+    overlay.mouse_rgb_exclude_layers = mouse_rgb_exclude_layers
 
     # Load keyboard layers
     overlay.load_layers()
@@ -2059,6 +2146,11 @@ def main():
                             if mr['layer'] == overlay.mouse_remap_active_layer), None)
             if active:
                 mouse_client.bind(active['restore'])
+        if mouse_client and overlay.mouse_override_active:
+            # Exiting mid-override (e.g. Ctrl+C while a remapped/colored
+            # layer is held) - resume any paused ckb-next processes,
+            # otherwise they'd stay SIGSTOPped forever after this exits.
+            mouse_client.resume_animations(overlay.mouse_override_paused_pids)
 
     return ret if 'ret' in locals() else 0
 

@@ -10,6 +10,7 @@ node to avoid conflicts.
 """
 
 import glob
+import signal
 import threading
 import time
 import os
@@ -34,6 +35,48 @@ def find_m65_ultra_device() -> Optional[str]:
         except FileNotFoundError:
             continue  # ckb0 is the root control node, has no productid
     return None
+
+
+_CKB_GUI_EXE = "/usr/local/bin/ckb-next"           # exact match only - see note below
+_CKB_ANIMATION_EXE_SUBSTR = "ckb-next-animations"
+
+
+def find_animation_pids(device_path: str) -> List[int]:
+    """Find ckb-next process PIDs currently driving live software RGB on
+    this device: the animation render helpers (e.g.
+    /usr/local/libexec/ckb-next-animations/wave) AND the ckb-next GUI
+    process itself (--background mode) - both hold the cmd fifo open and
+    continuously write to it as long as an "Animation" lighting effect is
+    configured, so a script wanting exclusive control needs to pause both
+    rather than race their frame updates.
+
+    Matches by (a) holding an open file descriptor on '<device_path>/cmd'
+    and (b) an executable path either containing 'ckb-next-animations', or
+    *exactly* equal to the ckb-next GUI binary path. The exact-match (not
+    substring) for the GUI binary is deliberate: 'ckb-next-daemon' also
+    contains 'ckb-next' as a substring, and accidentally pausing the daemon
+    itself would freeze the device entirely, not just its animation - the
+    daemon typically also runs as a different user anyway, so its
+    /proc/<pid>/fd usually isn't even readable by us, but this check does
+    not rely on that.
+    """
+    cmd_path = f'{device_path}/cmd'
+    pids = []
+    for fd_path in glob.glob('/proc/[0-9]*/fd/*'):
+        try:
+            target = os.readlink(fd_path)
+        except OSError:
+            continue
+        if target != cmd_path:
+            continue
+        pid = int(fd_path.split('/')[2])
+        try:
+            exe = os.readlink(f'/proc/{pid}/exe')
+        except OSError:
+            continue
+        if _CKB_ANIMATION_EXE_SUBSTR in exe or exe == _CKB_GUI_EXE:
+            pids.append(pid)
+    return pids
 
 
 class CorsairMouseMonitor:
@@ -277,6 +320,64 @@ class CorsairMouseMonitor:
         except Exception as e:
             print(f"Error sending bind command: {e}")
             return False
+
+    def idle(self) -> bool:
+        """Hand the device back to hardware-controlled mode.
+
+        This is the counterpart to the 'active' command sent by bind() and
+        set_rgb(): switching to software/active mode makes the daemon the
+        source of truth for RGB and rebinds, which means the device's own
+        onboard profile animations freeze (the host must animate). Sending
+        'idle' switches back to hardware mode, where profile-based RGB
+        animations and button/DPI mappings resume immediately. Software
+        overrides (bind/rgb) have no effect again until active() runs.
+
+        CAUTION: only correct for genuine onboard/hardware-stored effects.
+        If the configured "animation" is actually rendered by a persistent
+        ckb-next helper process (see find_animation_pids()/pause_animations()
+        below - this is the common case for anything configured as an
+        "Animation" in the ckb-next GUI, e.g. wave/rain/rainbow), idle()
+        will strand it: those processes don't re-send 'active' on their own,
+        so once idle() takes the device out of software mode they can never
+        get back in, and the LEDs just freeze instead of resuming anything.
+        Use pause_animations()/resume_animations() for that case instead.
+
+        Returns True if the command was written successfully.
+        """
+        try:
+            with open(self.cmd_path, 'w') as cmd:
+                cmd.write('idle\n')
+                cmd.flush()
+            return True
+        except Exception as e:
+            print(f"Error sending idle command: {e}")
+            return False
+
+    def pause_animations(self) -> List[int]:
+        """SIGSTOP any ckb-next processes (animation render helpers AND the
+        GUI itself, see find_animation_pids()) currently driving this
+        device, so a caller can hold exclusive RGB control without racing
+        their continuous frame updates.
+
+        Returns the list of PIDs stopped - pass it to resume_animations()
+        afterward. An empty list (no matching processes found, e.g. the
+        configured lighting isn't an "Animation") is a harmless no-op.
+        """
+        pids = find_animation_pids(self.device_path)
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGSTOP)
+            except ProcessLookupError:
+                pass
+        return pids
+
+    def resume_animations(self, pids: List[int]) -> None:
+        """SIGCONT processes previously paused by pause_animations()."""
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
 
     def set_rgb(self, zone: str, color: str) -> bool:
         """
