@@ -1230,9 +1230,11 @@ class HotkeyMonitor(threading.Thread):
 class KeyboardMonitor(threading.Thread):
     """Monitor keyboard layer changes via USB"""
 
-    def __init__(self, keyboard, overlay: KeyboardOverlay, rows: int, cols: int, brightness_keys: list = None):
+    def __init__(self, keyboard, overlay: KeyboardOverlay, rows: int, cols: int, brightness_keys: list = None,
+                 heatmap=None):
         super().__init__(daemon=True)
         self.keyboard = keyboard
+        self.heatmap = heatmap  # optional HeatmapLogger
         self.overlay = overlay
         self.rows = rows
         self.cols = cols
@@ -1446,6 +1448,10 @@ class KeyboardMonitor(threading.Thread):
                             pressed = current_state[row][col]
                             key_idx = row * self.cols + col
 
+                            # Heatmap: log before layer switching so the layer is the one active at the event
+                            if self.heatmap:
+                                self.heatmap.log(row, col, self.current_layer, pressed)
+
                             # Check for interactive mode trigger key
                             if row == self.interactive_key_row and col == self.interactive_key_col:
                                 if pressed and self.current_layer == self.interactive_key_layer:
@@ -1542,6 +1548,9 @@ class KeyboardMonitor(threading.Thread):
                         if now - last_fired >= bk.get('repeat_interval', 0.2):
                             self._fire_brightness_step(bk)
                             self.brightness_key_state[(row, col)] = now
+
+                if self.heatmap:
+                    self.heatmap.tick()
 
                 self.prev_state = current_state
                 time.sleep(0.007)  # ~150Hz polling (was 0.02 = 50Hz, 3x faster)
@@ -2006,7 +2015,20 @@ def main():
     overlay.load_layers()
 
     # Start keyboard monitoring thread
-    keyboard_monitor = KeyboardMonitor(keyboard, overlay, rows, cols, brightness_keys=brightness_keys)
+    heatmap = None
+    raw_heatmap = config.get('heatmap', {}) or {}
+    if raw_heatmap.get('enabled'):
+        from heatmap_logger import HeatmapLogger
+        heatmap_dir = raw_heatmap.get('directory') or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'heatmap_data')
+        heatmap = HeatmapLogger(
+            heatmap_dir, rows, cols,
+            rollover_hour=int(raw_heatmap.get('rollover_hour', 5)),
+            flush_interval=float(raw_heatmap.get('flush_interval', 5)))
+        print(f"[HEATMAP] Logging key events to {heatmap.directory} (rollover {heatmap.rollover_hour:02d}:00)")
+
+    keyboard_monitor = KeyboardMonitor(keyboard, overlay, rows, cols,
+                                       brightness_keys=brightness_keys, heatmap=heatmap)
     keyboard_monitor.start()
 
     print("\nOverlay window active!")
@@ -2022,6 +2044,9 @@ def main():
         print("\nShutting down...")
     finally:
         keyboard_monitor.running = False
+        if heatmap:
+            keyboard_monitor.join(timeout=1)
+            heatmap.close()
         keyboard.close()
         # Stop Home Assistant polling if enabled
         if ha_client:

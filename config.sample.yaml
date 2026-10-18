@@ -204,3 +204,25 @@ mouse_remap:
   #     remap:
   #       wheelup: volup
   #       wheeldn: voldn
+
+# -----------------------------------------------------------------------------
+# Key usage heatmap - append-only log of every key press/release
+# -----------------------------------------------------------------------------
+# PRIVACY: a timestamped per-key log can reconstruct what you typed, including
+# passwords. Disabled by default. Files are created with mode 600.
+#
+# One binary file per logical day (heatmap-YYYY-MM-DD.bin), 16 bytes per event:
+# unix time in ms, row, col, layer, event (1 = press, 0 = release).
+# The day rolls over at rollover_hour local time, so events at 02:00 land in
+# the previous day's file. Summarize with: ./heatmap_report.py --from 7d
+heatmap:
+  # enabled: false
+
+  # Directory for the data files (default: heatmap_data/ next to the script)
+  # directory: /home/you/.local/share/qmk-tools
+
+  # Local hour at which a new file starts
+  # rollover_hour: 5
+
+  # Seconds between disk writes (events are also flushed every 4 KB)
+  # flush_interval: 5

@@ -31,3 +31,6 @@ ENV/
 
 # Local configuration (contains secrets like tokens - do not commit)
 config.yaml
+
+# Key usage heatmap data (privacy sensitive)
+heatmap_data/

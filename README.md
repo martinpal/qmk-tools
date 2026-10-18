@@ -284,6 +284,26 @@ Press the physical key you want to bind - it prints `Key [row,col]: PRESSED`. On
 
 **Interaction with layer color sync:** if you're using the MQTT-based "QMK Layer Light Sync" HA automation (see [Layer Color Sync](#home-assistant-light-color-sync-optional) below) to tint a light with the active layer's color, the first brightness step after entering a layer restores that light to its pre-layer-color state (via the automation's own `scene.qmk_light_snapshot` / `input_boolean.qmk_override_active` bookkeeping) before applying the step. This gives immediate visual feedback on the light's real color/brightness instead of dimming it while still tinted, and it also clears the override flag so returning to the base layer doesn't undo the brightness change you just made.
 
+### Key Usage Heatmap (Optional)
+
+Logs every key press/release (timestamp in ms, row, col, active layer) to an
+append-only binary file, one file per day that rolls over at 05:00 local time
+(`heatmap_data/heatmap-YYYY-MM-DD.bin`, 16 bytes per event, mode 600).
+Disabled by default - enable with `heatmap.enabled: true` (see
+`config.sample.yaml`).
+
+**Privacy:** a timestamped per-key log can reconstruct what you typed,
+including passwords.
+
+Summarize with `heatmap_report.py`:
+
+```bash
+./heatmap_report.py                              # everything
+./heatmap_report.py --from 7d                    # last 7 days
+./heatmap_report.py --from 2026-10-01 --to 2026-10-08 --layer 0
+./heatmap_report.py --csv > keys.csv
+```
+
 ## Components
 
 ### keyboard_overlay_gui.py
