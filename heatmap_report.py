@@ -100,6 +100,7 @@ def main():
     ap.add_argument("--layer", type=int, help="only count events on this layer")
     ap.add_argument("--top", type=int, default=10, help="number of most-used keys to list")
     ap.add_argument("--csv", action="store_true", help="print row,col,presses CSV instead of the report")
+    ap.add_argument("--no-layers", action="store_true", help="skip the per-layer reports")
     ap.add_argument("--no-color", action="store_true", help="plain numbers without colored cells")
     args = ap.parse_args()
 
@@ -109,6 +110,7 @@ def main():
     files = sorted(glob.glob(os.path.join(os.path.expanduser(args.dir), "heatmap-*.bin")))
     rows = cols = 0
     counts = {}
+    layer_counts = {}  # layer -> {(row, col): presses}
     total = 0
     first = last = None
     for path in files:
@@ -129,6 +131,8 @@ def main():
             last = ms if last is None else max(last, ms)
             if pressed:
                 counts[(r, c)] = counts.get((r, c), 0) + 1
+                lc = layer_counts.setdefault(layer, {})
+                lc[(r, c)] = lc.get((r, c), 0) + 1
                 total += 1
 
     if args.csv:
@@ -145,10 +149,18 @@ def main():
     print(f"{total} presses, {fmt(first)} .. {fmt(last)}"
           + (f", layer {args.layer}" if args.layer is not None else ""))
     print("\nPresses per key:\n")
-    print(render_grid(counts, rows, cols, sys.stdout.isatty() and not args.no_color))
+    color = sys.stdout.isatty() and not args.no_color
+    print(render_grid(counts, rows, cols, color))
     print(f"\nTop {args.top} keys:")
     for (r, c), n in sorted(counts.items(), key=lambda kv: -kv[1])[: args.top]:
         print(f"  row {r} col {c}: {n} ({100 * n / total:.1f}%)")
+
+    if args.layer is None and not args.no_layers:
+        for layer in sorted(layer_counts):
+            lc = layer_counts[layer]
+            n = sum(lc.values())
+            print(f"\nLayer {layer} \u2014 {n} presses ({100 * n / total:.1f}% of total), peak {max(lc.values())}\n")
+            print(render_grid(lc, rows, cols, color))
 
 
 if __name__ == "__main__":
