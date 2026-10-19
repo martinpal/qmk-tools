@@ -59,6 +59,15 @@ def read_events(path: str, t0: float, t1: float):
     return rows, cols, events
 
 
+# Keep in sync with layer_info in keyboard_overlay_gui.py (not importable here: it pulls in PyQt)
+LAYER_NAMES = {0: "Base", 1: "Game", 2: "Lower", 3: "Raise", 4: "Adjust", 5: "Mouse", 6: "Extra"}
+
+
+def layer_label(layer: int) -> str:
+    name = LAYER_NAMES.get(layer)
+    return f"{layer} ({name})" if name else str(layer)
+
+
 RAMP = (19, 27, 37, 41, 76, 148, 220, 208, 196)  # 256-color backgrounds, cold -> hot
 
 
@@ -155,7 +164,7 @@ def main():
 
     fmt = lambda ms: datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
     print(f"{total} presses, {fmt(first)} .. {fmt(last)}"
-          + (f", layer {args.layer}" if args.layer is not None else ""))
+          + (f", layer {layer_label(args.layer)}" if args.layer is not None else ""))
     print("\nPresses per key:\n")
     color = sys.stdout.isatty() and not args.no_color
     widths = grid_widths(counts, rows, cols)
@@ -168,7 +177,7 @@ def main():
         for layer in sorted(layer_counts):
             lc = layer_counts[layer]
             n = sum(lc.values())
-            print(f"\nLayer {layer} \u2014 {n} presses ({100 * n / total:.1f}% of total), peak {max(lc.values())}\n")
+            print(f"\nLayer {layer_label(layer)} \u2014 {n} presses ({100 * n / total:.1f}% of total), peak {max(lc.values())}\n")
             print(render_grid(lc, rows, cols, color, widths))
 
 
