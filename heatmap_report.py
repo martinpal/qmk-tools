@@ -89,21 +89,30 @@ def grid_widths(counts: dict, rows: int, cols: int) -> tuple:
     return max(5, len(str(peak)) + 2), max(len(str(row_max)), 1)
 
 
-def render_grid(counts: dict, rows: int, cols: int, color: bool, widths: tuple = None) -> str:
+def render_grid(counts: dict, rows: int, cols: int, color: bool, widths: tuple = None,
+                header: bool = False) -> str:
     """Matrix counts laid out like the overlay: split boards show both halves side by side,
-    right half in mirrored column order, with each half's row total at the outer edges."""
+    right half in mirrored column order, with each half's row total at the outer edges.
+    header=True adds column numbers above the grid."""
     peak = max(counts.values())
     width, tw = widths or grid_widths(counts, rows, cols)
     cell = lambda r, c: render_cell(counts.get((r, c), 0), peak, width, color)
     total = lambda r: sum(counts.get((r, c), 0) for c in range(cols))
     lines = []
+    num = lambda n: f"{n:^{width}}"
     if rows % 2 == 0 and rows >= 8:
         half = rows // 2
+        if header:
+            # Left half 1..N left to right; right half N..1 left to right (1 = outer edge)
+            lines.append(" " * (tw + 2) + "".join(num(c + 1) for c in range(cols))
+                         + " \u2502 " + "".join(num(c + 1) for c in range(cols - 1, -1, -1)))
         for r in range(half):
             left = "".join(cell(r, c) for c in range(cols))
             right = "".join(cell(r + half, c) for c in range(cols - 1, -1, -1))
             lines.append(f"{total(r):>{tw}} |{left} \u2502 {right}| {total(r + half):>{tw}}")
     else:
+        if header:
+            lines.append(" " * (tw + 2) + "".join(num(c + 1) for c in range(cols)))
         for r in range(rows):
             lines.append(f"{total(r):>{tw}} |" + "".join(cell(r, c) for c in range(cols)))
     return "\n".join(lines)
@@ -111,7 +120,8 @@ def render_grid(counts: dict, rows: int, cols: int, color: bool, widths: tuple =
 
 def render_top(counts: dict, rows: int, cols: int, top: int, total: int) -> str:
     """Most-used keys. Split boards get one list per half, side by side, labelled with
-    row 1..N within the half and column 1..N as displayed (right half mirrored)."""
+    row 1..N within the half and column 1..N counting from the left edge (left half)
+    or the right edge (right half), matching the grid header."""
     ranked = sorted(counts.items(), key=lambda kv: -kv[1])
     entry = lambda row, col, n: f"row {row} col {col}: {n} ({100 * n / total:.1f}%)"
     if not (rows % 2 == 0 and rows >= 8):
@@ -120,7 +130,7 @@ def render_top(counts: dict, rows: int, cols: int, top: int, total: int) -> str:
         return "\n".join(lines)
     half = rows // 2
     left = [entry(r + 1, c + 1, n) for (r, c), n in ranked if r < half][:top]
-    right = [entry(r - half + 1, cols - c, n) for (r, c), n in ranked if r >= half][:top]
+    right = [entry(r - half + 1, c + 1, n) for (r, c), n in ranked if r >= half][:top]
     head_l, head_r = f"Top {top} left half:", f"Top {top} right half:"
     w = max([len(head_l)] + [len(x) + 2 for x in left])
     lines = [f"{head_l:<{w}}    {head_r}"]
@@ -190,7 +200,7 @@ def main():
     print("\nPresses per key:\n")
     color = sys.stdout.isatty() and not args.no_color
     widths = grid_widths(counts, rows, cols)
-    print(render_grid(counts, rows, cols, color, widths))
+    print(render_grid(counts, rows, cols, color, widths, header=True))
     print()
     print(render_top(counts, rows, cols, args.top, total))
 
