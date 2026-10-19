@@ -73,22 +73,30 @@ def render_cell(n: int, peak: int, width: int, color: bool) -> str:
     return f"\033[48;5;{RAMP[idx]};{fg}m{text}\033[0m"
 
 
-def render_grid(counts: dict, rows: int, cols: int, color: bool) -> str:
-    """Matrix counts laid out like the overlay: split boards show both halves side by side,
-    right half in mirrored column order."""
+def grid_widths(counts: dict, rows: int, cols: int) -> tuple:
+    """(cell width, row-total width) for the overall counts; share across all grids so they align."""
     peak = max(counts.values())
-    width = max(5, len(str(peak)) + 2)
+    row_max = max(sum(counts.get((r, c), 0) for c in range(cols)) for r in range(rows))
+    return max(5, len(str(peak)) + 2), max(len(str(row_max)), 1)
+
+
+def render_grid(counts: dict, rows: int, cols: int, color: bool, widths: tuple = None) -> str:
+    """Matrix counts laid out like the overlay: split boards show both halves side by side,
+    right half in mirrored column order, with each half's row total at the outer edges."""
+    peak = max(counts.values())
+    width, tw = widths or grid_widths(counts, rows, cols)
     cell = lambda r, c: render_cell(counts.get((r, c), 0), peak, width, color)
+    total = lambda r: sum(counts.get((r, c), 0) for c in range(cols))
     lines = []
     if rows % 2 == 0 and rows >= 8:
         half = rows // 2
         for r in range(half):
             left = "".join(cell(r, c) for c in range(cols))
             right = "".join(cell(r + half, c) for c in range(cols - 1, -1, -1))
-            lines.append(f"{left} \u2502 {right}")
+            lines.append(f"{total(r):>{tw}} |{left} \u2502 {right}| {total(r + half):>{tw}}")
     else:
         for r in range(rows):
-            lines.append("".join(cell(r, c) for c in range(cols)))
+            lines.append(f"{total(r):>{tw}} |" + "".join(cell(r, c) for c in range(cols)))
     return "\n".join(lines)
 
 
@@ -150,7 +158,8 @@ def main():
           + (f", layer {args.layer}" if args.layer is not None else ""))
     print("\nPresses per key:\n")
     color = sys.stdout.isatty() and not args.no_color
-    print(render_grid(counts, rows, cols, color))
+    widths = grid_widths(counts, rows, cols)
+    print(render_grid(counts, rows, cols, color, widths))
     print(f"\nTop {args.top} keys:")
     for (r, c), n in sorted(counts.items(), key=lambda kv: -kv[1])[: args.top]:
         print(f"  row {r} col {c}: {n} ({100 * n / total:.1f}%)")
@@ -160,7 +169,7 @@ def main():
             lc = layer_counts[layer]
             n = sum(lc.values())
             print(f"\nLayer {layer} \u2014 {n} presses ({100 * n / total:.1f}% of total), peak {max(lc.values())}\n")
-            print(render_grid(lc, rows, cols, color))
+            print(render_grid(lc, rows, cols, color, widths))
 
 
 if __name__ == "__main__":
