@@ -59,13 +59,35 @@ def read_events(path: str, t0: float, t1: float):
     return rows, cols, events
 
 
-# Keep in sync with layer_info in keyboard_overlay_gui.py (not importable here: it pulls in PyQt)
+# Keep in sync with layer_info / qt_colors in keyboard_overlay_gui.py (not importable here: it pulls in PyQt)
 LAYER_NAMES = {0: "Base", 1: "Game", 2: "Lower", 3: "Raise", 4: "Adjust", 5: "Mouse", 6: "Extra"}
+LAYER_COLORS = {
+    0: ("white", (120, 120, 120)),
+    1: ("cyan", (0, 255, 255)),
+    2: ("red", (255, 50, 50)),
+    3: ("blue", (100, 150, 255)),
+    4: ("green", (80, 220, 80)),
+    5: ("orange", (255, 165, 0)),
+    6: ("magenta", (255, 0, 255)),
+}
 
 
 def layer_label(layer: int) -> str:
+    """'4 (Adjust, green)'; falls back to the bare number for unknown layers."""
     name = LAYER_NAMES.get(layer)
+    color = LAYER_COLORS.get(layer)
+    if name and color:
+        return f"{layer} ({name}, {color[0]})"
     return f"{layer} ({name})" if name else str(layer)
+
+
+def layer_swatch(layer: int, color: bool) -> str:
+    """Colored block for the layer header; empty in plain output or for unknown layers."""
+    rgb = LAYER_COLORS.get(layer)
+    if not color or not rgb:
+        return ""
+    r, g, b = rgb[1]
+    return f"\033[38;2;{r};{g};{b}m\u2588\u2588\033[0m "
 
 
 RAMP = (19, 27, 37, 41, 76, 148, 220, 208, 196)  # 256-color backgrounds, cold -> hot
@@ -208,7 +230,7 @@ def main():
         for layer in sorted(layer_counts):
             lc = layer_counts[layer]
             n = sum(lc.values())
-            print(f"\nLayer {layer_label(layer)} \u2014 {n} presses ({100 * n / total:.1f}% of total), peak {max(lc.values())}\n")
+            print(f"\n{layer_swatch(layer, color)}Layer {layer_label(layer)} \u2014 {n} presses ({100 * n / total:.1f}% of total), peak {max(lc.values())}\n")
             print(render_grid(lc, rows, cols, color, widths))
 
 
