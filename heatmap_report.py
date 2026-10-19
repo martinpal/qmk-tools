@@ -109,6 +109,28 @@ def render_grid(counts: dict, rows: int, cols: int, color: bool, widths: tuple =
     return "\n".join(lines)
 
 
+def render_top(counts: dict, rows: int, cols: int, top: int, total: int) -> str:
+    """Most-used keys. Split boards get one list per half, side by side, labelled with
+    row 1..N within the half and column 1..N as displayed (right half mirrored)."""
+    ranked = sorted(counts.items(), key=lambda kv: -kv[1])
+    entry = lambda row, col, n: f"row {row} col {col}: {n} ({100 * n / total:.1f}%)"
+    if not (rows % 2 == 0 and rows >= 8):
+        lines = [f"Top {top} keys:"]
+        lines += [f"  {entry(r + 1, c + 1, n)}" for (r, c), n in ranked[:top]]
+        return "\n".join(lines)
+    half = rows // 2
+    left = [entry(r + 1, c + 1, n) for (r, c), n in ranked if r < half][:top]
+    right = [entry(r - half + 1, cols - c, n) for (r, c), n in ranked if r >= half][:top]
+    head_l, head_r = f"Top {top} left half:", f"Top {top} right half:"
+    w = max([len(head_l)] + [len(x) + 2 for x in left])
+    lines = [f"{head_l:<{w}}    {head_r}"]
+    for i in range(max(len(left), len(right))):
+        l = f"  {left[i]}" if i < len(left) else ""
+        r = f"  {right[i]}" if i < len(right) else ""
+        lines.append(f"{l:<{w}}    {r}".rstrip())
+    return "\n".join(lines)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dir", default=DEFAULT_DIR, help="heatmap data directory")
@@ -169,9 +191,8 @@ def main():
     color = sys.stdout.isatty() and not args.no_color
     widths = grid_widths(counts, rows, cols)
     print(render_grid(counts, rows, cols, color, widths))
-    print(f"\nTop {args.top} keys:")
-    for (r, c), n in sorted(counts.items(), key=lambda kv: -kv[1])[: args.top]:
-        print(f"  row {r} col {c}: {n} ({100 * n / total:.1f}%)")
+    print()
+    print(render_top(counts, rows, cols, args.top, total))
 
     if args.layer is None and not args.no_layers:
         for layer in sorted(layer_counts):
