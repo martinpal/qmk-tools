@@ -104,25 +104,45 @@ def render_cell(n: int, peak: int, width: int, color: bool) -> str:
     return f"\033[48;5;{RAMP[idx]};{fg}m{text}\033[0m"
 
 
+def is_split(rows: int) -> bool:
+    return rows % 2 == 0 and rows >= 8
+
+
+def column_totals(counts: dict, rows: int, cols: int):
+    """Per-column press totals, skipping each half's last row (the thumb cluster) on split boards.
+    Returns (left, right) lists indexed by matrix column; right is None on non-split boards."""
+    if not is_split(rows):
+        return [sum(counts.get((r, c), 0) for r in range(rows)) for c in range(cols)], None
+    half = rows // 2
+    left = [sum(counts.get((r, c), 0) for r in range(half - 1)) for c in range(cols)]
+    right = [sum(counts.get((r, c), 0) for r in range(half, rows - 1)) for c in range(cols)]
+    return left, right
+
+
 def grid_widths(counts: dict, rows: int, cols: int) -> tuple:
-    """(cell width, row-total width) for the overall counts; share across all grids so they align."""
-    peak = max(counts.values())
+    """(cell width, row-total width) for the overall counts; share across all grids so they align.
+    Overall counts bound every per-layer grid, including the column totals and their corners."""
+    left, right = column_totals(counts, rows, cols)
     row_max = max(sum(counts.get((r, c), 0) for c in range(cols)) for r in range(rows))
-    return max(5, len(str(peak)) + 2), max(len(str(row_max)), 1)
+    cell_max = max([max(counts.values())] + left + (right or []))
+    corner_max = max(sum(left), sum(right or [0]))
+    return max(5, len(str(cell_max)) + 2), max(len(str(max(row_max, corner_max))), 1)
 
 
 def render_grid(counts: dict, rows: int, cols: int, color: bool, widths: tuple = None,
                 header: bool = False) -> str:
     """Matrix counts laid out like the overlay: split boards show both halves side by side,
     right half in mirrored column order, with each half's row total at the outer edges.
-    header=True adds column numbers above the grid."""
+    header=True adds column numbers above the grid. A totals row follows the grid
+    (thumb row excluded on split boards); its corners are the sums of the column totals."""
     peak = max(counts.values())
     width, tw = widths or grid_widths(counts, rows, cols)
     cell = lambda r, c: render_cell(counts.get((r, c), 0), peak, width, color)
     total = lambda r: sum(counts.get((r, c), 0) for c in range(cols))
-    lines = []
     num = lambda n: f"{n:^{width}}"
-    if rows % 2 == 0 and rows >= 8:
+    left_tot, right_tot = column_totals(counts, rows, cols)
+    lines = []
+    if is_split(rows):
         half = rows // 2
         if header:
             # Left half 1..N left to right; right half N..1 left to right (1 = outer edge)
@@ -132,11 +152,18 @@ def render_grid(counts: dict, rows: int, cols: int, color: bool, widths: tuple =
             left = "".join(cell(r, c) for c in range(cols))
             right = "".join(cell(r + half, c) for c in range(cols - 1, -1, -1))
             lines.append(f"{total(r):>{tw}} |{left} \u2502 {right}| {total(r + half):>{tw}}")
+        bar = "\u2500" * (cols * width)
+        lines.append(" " * tw + f" |{bar}\u2500\u253c\u2500{bar}|")
+        lines.append(f"{sum(left_tot):>{tw}} |" + "".join(num(n) for n in left_tot)
+                     + " \u2502 " + "".join(num(n) for n in reversed(right_tot))
+                     + f"| {sum(right_tot):>{tw}}")
     else:
         if header:
             lines.append(" " * (tw + 2) + "".join(num(c + 1) for c in range(cols)))
         for r in range(rows):
             lines.append(f"{total(r):>{tw}} |" + "".join(cell(r, c) for c in range(cols)))
+        lines.append(" " * tw + " |" + "\u2500" * (cols * width))
+        lines.append(f"{sum(left_tot):>{tw}} |" + "".join(num(n) for n in left_tot))
     return "\n".join(lines)
 
 
@@ -146,7 +173,7 @@ def render_top(counts: dict, rows: int, cols: int, top: int, total: int) -> str:
     or the right edge (right half), matching the grid header."""
     ranked = sorted(counts.items(), key=lambda kv: -kv[1])
     entry = lambda row, col, n: f"row {row} col {col}: {n} ({100 * n / total:.1f}%)"
-    if not (rows % 2 == 0 and rows >= 8):
+    if not is_split(rows):
         lines = [f"Top {top} keys:"]
         lines += [f"  {entry(r + 1, c + 1, n)}" for (r, c), n in ranked[:top]]
         return "\n".join(lines)
