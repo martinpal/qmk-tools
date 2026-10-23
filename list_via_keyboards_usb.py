@@ -1362,8 +1362,8 @@ class ViaKeyboard:
 
         # QMK keycodes (0x7C00-0x7DFF)
         qmk_codes = {
-            0x7C00: 'QK_BOOT', 0x7C01: 'QK_RBT', 0x7C02: 'QK_MAKE',
-            0x7C03: 'QK_VERS', 0x7C04: 'QK_CLR_EEPROM',
+            0x7C00: 'QK_BOOT', 0x7C01: 'QK_REBOOT', 0x7C02: 'QK_DEBUG_TOGGLE',
+            0x7C03: 'QK_CLEAR_EEPROM', 0x7C04: 'QK_MAKE',
             0x7C16: 'QK_GESC',  # Grave Escape (ESC/~)
         }
         if keycode in qmk_codes:

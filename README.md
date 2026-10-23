@@ -340,6 +340,9 @@ GNOME Shell extension that displays the current keyboard layer in the top bar wi
 ### list_via_keyboards_usb.py
 VIA protocol implementation for USB HID communication with QMK keyboards.
 
+### key_labels.py
+Short overlay labels for `QK_` keycodes (`BOOTLDR`, `REBOOT`, `EE CLR`, `DEBUG`, `MAKE`, `ESC~`) and the warning borders of dangerous keys: clear EEPROM has a red border, bootloader and reboot an orange one.
+
 ### rgb_matrix_info.py / rgb_matrix_effects.json
 Formatting of the RGB matrix effect line and the effect-number → name table (see [RGB Matrix Effect Line](#rgb-matrix-effect-line)).
 
@@ -404,9 +407,9 @@ python3 test_gnome_indicator.py
 
 This sends test layer updates to verify the GNOME Shell extension is working.
 
-### Testing the RGB effect formatting
+### Testing the RGB effect formatting and key labels
 ```bash
-python3 -m unittest test_rgb_matrix_info
+python3 -m unittest test_rgb_matrix_info test_key_labels
 ```
 
 ## License

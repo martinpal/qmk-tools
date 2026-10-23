@@ -47,6 +47,7 @@ except ImportError:
 # Import our USB keyboard interface
 import list_via_keyboards_usb as via
 import rgb_matrix_info
+import key_labels
 
 # Import boblight client (optional)
 try:
@@ -704,13 +705,15 @@ class KeyboardOverlay(QWidget):
                 'GRV': '`',
                 'MINS': '-',
                 'EQL': '=',
-                'QK_GESC': 'ESC~',
             }
             if key_name in char_map:
                 key_name = char_map[key_name]
 
             # Improve RGB key display names - handle RGB(0xXX) format
             key_name = rgb_matrix_info.rgb_key_label(key_name) or key_name
+
+            # Short labels for QK_ keycodes (BOOT, EE CLR, ESC~, ...)
+            key_name = key_labels.short_label(key_name)
 
         # Make it shorter for display
         if len(key_name) > 8:
@@ -744,10 +747,17 @@ class KeyboardOverlay(QWidget):
             bg_color = QColor(60, 60, 80)
             text_color = QColor(150, 150, 200)
 
+        # Keys that reboot or erase settings get a sharp warning border
+        danger = key_labels.danger_border(display_keycode)
+        if danger:
+            border = f"2px solid rgb({danger[0]}, {danger[1]}, {danger[2]})"
+        else:
+            border = "1px solid rgba(100, 100, 100, 100)"
+
         label.setStyleSheet(f"""
             background-color: rgba({bg_color.red()}, {bg_color.green()}, {bg_color.blue()}, 180);
             color: rgb({text_color.red()}, {text_color.green()}, {text_color.blue()});
-            border: 1px solid rgba(100, 100, 100, 100);
+            border: {border};
             border-radius: 2px;
             padding: 0px;
             margin: 0px;
