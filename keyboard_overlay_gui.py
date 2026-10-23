@@ -304,18 +304,18 @@ class KeyboardOverlay(QWidget):
         self.header_label.setStyleSheet("background-color: rgba(0, 0, 0, 200); color: black; padding: 3px; border-radius: 3px;")  # Reduced padding
         layout.addWidget(self.header_label)
 
-        # Running RGB matrix effect (filled in by the keyboard monitor)
-        self.rgb_label = QLabel("")
-        self.rgb_label.setAlignment(Qt.AlignCenter)
-        self.rgb_label.setFont(QFont("Monospace", 9))
-        self.rgb_label.setStyleSheet("background-color: rgba(0, 0, 0, 160); color: white; padding: 1px; border-radius: 3px;")
-        layout.addWidget(self.rgb_label)
-
         # Keyboard grid
         self.grid_layout = QGridLayout()
         self.grid_layout.setSpacing(0)  # No spacing between keys
         self.grid_layout.setContentsMargins(0, 0, 0, 0)  # Remove margins
         layout.addLayout(self.grid_layout)
+
+        # Running RGB matrix effect at the bottom (filled in by the keyboard monitor)
+        self.rgb_label = QLabel("")
+        self.rgb_label.setAlignment(Qt.AlignCenter)
+        self.rgb_label.setFont(QFont("Monospace", 9))
+        self.rgb_label.setStyleSheet("background-color: rgba(0, 0, 0, 160); color: white; padding: 1px; border-radius: 3px;")
+        layout.addWidget(self.rgb_label)
 
         self.setLayout(layout)
 

@@ -307,7 +307,7 @@ Summarize with `heatmap_report.py`:
 
 ### RGB Matrix Effect Line
 
-Under the layer header the overlay shows the keyboard's running RGB matrix effect, read over the VIA protocol (`CMD_CUSTOM_GET_VALUE`, RGB matrix channel): effect name, effect speed, hue, saturation and value.
+At the bottom of the overlay window it shows the keyboard's running RGB matrix effect, read over the VIA protocol (`CMD_CUSTOM_GET_VALUE`, RGB matrix channel): effect name, effect speed, hue, saturation and value.
 
 - **Polling:** one value is read every 0.25 s by the keyboard monitor thread (the same thread and USB endpoint as the matrix polling), so all four values refresh about once a second and a read never stalls the matrix scan for more than one USB round trip. If a read fails (for example firmware without an RGB matrix) the line is hidden and the overlay retries after 10 s.
 - **Value (V):** VIA reports `V * 255 / RGB_MATRIX_MAXIMUM_BRIGHTNESS`. The overlay converts it back to QMK's 0-255 scale (`byte * max / 255`), using `max_brightness` from `rgb_matrix_effects.json` (120 for the current firmware).
