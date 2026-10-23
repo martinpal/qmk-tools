@@ -33,6 +33,18 @@ overlay:
   # keyboard: 1
 
 # -----------------------------------------------------------------------------
+# Local HTTP API - lets other processes on this machine sleep/wake the keyboard
+# -----------------------------------------------------------------------------
+# Binds to 127.0.0.1 only and has no authentication (requests with an Origin
+# header or a foreign Host header are rejected). Needs firmware that implements
+# the sleep/wake command (VIA command 0x50). See README, "Keyboard sleep/wake API".
+api:
+  # enabled: true
+
+  # TCP port on 127.0.0.1
+  # port: 8765
+
+# -----------------------------------------------------------------------------
 # Boblight integration - ambient LED lighting feedback based on keyboard layer
 # -----------------------------------------------------------------------------
 boblight:

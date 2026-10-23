@@ -48,6 +48,7 @@ except ImportError:
 import list_via_keyboards_usb as via
 import rgb_matrix_info
 import key_labels
+import keyboard_api
 
 # Import boblight client (optional)
 try:
@@ -1310,10 +1311,11 @@ class KeyboardMonitor(threading.Thread):
     """Monitor keyboard layer changes via USB"""
 
     def __init__(self, keyboard, overlay: KeyboardOverlay, rows: int, cols: int, brightness_keys: list = None,
-                 heatmap=None):
+                 heatmap=None, gateway=None):
         super().__init__(daemon=True)
         self.keyboard = keyboard
         self.heatmap = heatmap  # optional HeatmapLogger
+        self.gateway = gateway or keyboard_api.KeyboardGateway()  # sleep/wake requests from the HTTP API
         self.overlay = overlay
         self.rows = rows
         self.cols = cols
@@ -1503,8 +1505,21 @@ class KeyboardMonitor(threading.Thread):
         """Monitor keyboard matrix for layer changes"""
         print("Keyboard monitor started")
 
+        self.gateway.refresh(self.keyboard)
+
         while self.running:
             try:
+                # Serve sleep/wake requests from the HTTP API on this (the USB) thread
+                self.gateway.service(self.keyboard)
+
+                # While the keyboard sleeps only query its state (about once a second):
+                # matrix and RGB polling would just spam it, and the key that wakes it is swallowed
+                if self.gateway.asleep:
+                    self.gateway.poll_while_asleep(self.keyboard)
+                    self._show_sleeping()
+                    time.sleep(0.05)
+                    continue
+
                 # Read matrix state
                 matrix_data = self.keyboard.get_matrix_state(self.rows, self.cols, verbose=False)
                 if matrix_data is None:
@@ -1513,6 +1528,7 @@ class KeyboardMonitor(threading.Thread):
                         print("Too many USB errors, device may be disconnected. Attempting reconnection...")
 
                         # Keep trying to reconnect every 1 second
+                        self.gateway.connected = False
                         while self.running:
                             if self.reconnect_keyboard():
                                 # Reconnection successful, reset error count and continue
@@ -1522,6 +1538,8 @@ class KeyboardMonitor(threading.Thread):
                             else:
                                 # Reconnection failed, wait 1 second and retry
                                 time.sleep(1)
+                        self.gateway.connected = True
+                        self.gateway.refresh(self.keyboard)  # a replugged keyboard is awake
                     time.sleep(0.02)
                     continue
 
@@ -1529,6 +1547,14 @@ class KeyboardMonitor(threading.Thread):
                 self.error_count = 0
 
                 current_state = self.keyboard.decode_matrix_state(matrix_data, self.rows, self.cols)
+
+                # Right after a sleep: take over the current matrix state without treating
+                # keys that are still held (e.g. the one that woke the keyboard) as new events
+                if self.gateway.resume_pending:
+                    self.gateway.resume_pending = False
+                    self.prev_state = current_state
+                    self.rgb_last_text = None
+                    continue
 
                 # Detect changes
                 layer_changed = False
@@ -1653,6 +1679,13 @@ class KeyboardMonitor(threading.Thread):
 
     RGB_POLL_INTERVAL = 0.25  # seconds between single-value reads (all four every ~1 s)
     RGB_POLL_BACKOFF = 10.0   # seconds to wait after a failed read (e.g. firmware without RGB matrix)
+
+    def _show_sleeping(self):
+        """Replace the RGB effect line with a notice while the keyboard sleeps."""
+        text = "Keyboard asleep"
+        if text != self.rgb_last_text:
+            self.rgb_last_text = text
+            self.rgb_effect_signal.text_changed.emit(text)
 
     def _poll_rgb_effect(self):
         """Read one RGB matrix value per call and publish the description when it changes."""
@@ -1792,6 +1825,13 @@ def apply_config_defaults(parser, config: dict):
     if 'entity' in color:
         parser.set_defaults(ha_color_entity=color['entity'])
 
+    # --- api ---
+    api_cfg = config.get('api', {}) or {}
+    if api_cfg.get('enabled') is False:
+        parser.set_defaults(no_api=True)
+    if 'port' in api_cfg:
+        parser.set_defaults(api_port=int(api_cfg['port']))
+
     # --- mqtt ---
     mqtt_cfg = config.get('mqtt', {}) or {}
     if 'enabled' in mqtt_cfg:
@@ -1876,6 +1916,9 @@ def main():
     parser.add_argument('--mqtt-username', type=str, default=None, help='MQTT broker username')
     parser.add_argument('--mqtt-password', type=str, default=os.environ.get('MQTT_PASSWORD'), help='MQTT broker password (default: MQTT_PASSWORD env var)')
     parser.add_argument('--mqtt-device-id', type=str, default='keyboard1', help='Device id used in MQTT topics, e.g. qmk/<device-id>/layer (default: keyboard1)')
+
+    parser.add_argument('--no-api', action='store_true', help='Do not start the local HTTP API (sleep/wake the keyboard)')
+    parser.add_argument('--api-port', type=int, default=keyboard_api.DEFAULT_PORT, help=f'Port of the local HTTP API on 127.0.0.1 (default: {keyboard_api.DEFAULT_PORT})')
 
     # Apply config.yaml values as defaults (CLI args will override these)
     if config:
@@ -2174,9 +2217,19 @@ def main():
             flush_interval=float(raw_heatmap.get('flush_interval', 5)))
         print(f"[HEATMAP] Logging key events to {heatmap.directory} (rollover {heatmap.rollover_hour:02d}:00)")
 
+    gateway = keyboard_api.KeyboardGateway()
     keyboard_monitor = KeyboardMonitor(keyboard, overlay, rows, cols,
-                                       brightness_keys=brightness_keys, heatmap=heatmap)
+                                       brightness_keys=brightness_keys, heatmap=heatmap, gateway=gateway)
     keyboard_monitor.start()
+
+    api_server = None
+    if not args.no_api:
+        try:
+            api_server = keyboard_api.ApiServer(gateway, port=args.api_port)
+            api_server.start()
+            print(f"[API] Keyboard sleep/wake API on http://127.0.0.1:{api_server.port}/api/v1/keyboard")
+        except OSError as e:
+            print(f"[API] Could not start the HTTP API on port {args.api_port}: {e}")
 
     print("\nOverlay window active!")
     print(f"- Press L[{keyboard_monitor.interactive_key_row},{keyboard_monitor.interactive_key_col}] on layer {keyboard_monitor.interactive_key_layer} to make window interactive (drag to move)")
@@ -2191,6 +2244,8 @@ def main():
         print("\nShutting down...")
     finally:
         keyboard_monitor.running = False
+        if api_server:
+            api_server.stop()
         if heatmap:
             keyboard_monitor.join(timeout=1)
             heatmap.close()

@@ -318,6 +318,29 @@ At the bottom of the overlay window it shows the keyboard's running RGB matrix e
 
 The firmware needs VIA enabled with the RGB matrix channel. The exact values returned by real hardware have not yet been checked against this documentation.
 
+### Keyboard sleep/wake API
+
+Only the overlay can talk to the keyboard over USB (it claims the VIA interface, and the VIA protocol has no request ids), so other programs ask the overlay to send the firmware's sleep/wake command through a small HTTP API. It listens on `127.0.0.1:8765` only (port: `api.port` in `config.yaml` or `--api-port`; disable with `api.enabled: false` or `--no-api`), has **no authentication**, and rejects requests that carry an `Origin` header or a `Host` other than `127.0.0.1`/`localhost`, so a web page cannot trigger it.
+
+| Request | Meaning |
+|---|---|
+| `POST /api/v1/keyboard/sleep` | put the keyboard to sleep (idempotent) |
+| `POST /api/v1/keyboard/wake` | wake it (idempotent) |
+| `GET /api/v1/keyboard` | query the state |
+| `GET /api/v1/health` | the overlay is alive |
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/v1/keyboard/sleep   # {"keyboard": "connected", "state": "asleep"}
+curl http://127.0.0.1:8765/api/v1/keyboard                  # {"keyboard": "connected", "state": "awake"}
+```
+
+Errors are `{"error": "..."}` with: `501 unsupported` (firmware without the sleep command), `503 keyboard_disconnected`, `504 timeout` (no USB answer within 2 s), `403 forbidden` (Origin/Host check), `404`/`405` (unknown path/method), `400 bad_request`.
+
+- **State:** read from the keyboard (command `0x50`, byte 1 = 1 sleep, 0 wake, 2 query; the reply carries the state after the command). The overlay queries at startup and after a reconnect.
+- **While the keyboard sleeps** the overlay stops polling the matrix and the RGB effect and only queries the state about once a second, so it notices a wake by key press or encoder turn within about a second. The bottom label shows "Keyboard asleep". The key that wakes the keyboard is swallowed by the firmware and is not logged by the heatmap; the overlay takes over the current matrix state on waking instead of reporting held keys as new presses.
+- **Threading:** HTTP handlers never touch USB; they queue the request for the keyboard monitor thread, which runs it between matrix polls.
+- The firmware side (`users/dontpanic/host_sleep.c`) was not yet flashed when this was written, so the whole path is untested against real hardware.
+
 ## Components
 
 ### keyboard_overlay_gui.py
@@ -339,6 +362,9 @@ GNOME Shell extension that displays the current keyboard layer in the top bar wi
 
 ### list_via_keyboards_usb.py
 VIA protocol implementation for USB HID communication with QMK keyboards.
+
+### keyboard_api.py
+Local HTTP API and the thread-safe gateway to the USB thread (see [Keyboard sleep/wake API](#keyboard-sleepwake-api)).
 
 ### key_labels.py
 Short overlay labels for `QK_` keycodes (`BOOTLDR`, `REBOOT`, `EE CLR`, `DEBUG`, `MAKE`, `ESC~`) and the warning borders of dangerous keys: clear EEPROM has a red border, bootloader and reboot an orange one.
@@ -407,9 +433,9 @@ python3 test_gnome_indicator.py
 
 This sends test layer updates to verify the GNOME Shell extension is working.
 
-### Testing the RGB effect formatting and key labels
+### Testing the RGB effect formatting, key labels and the HTTP API
 ```bash
-python3 -m unittest test_rgb_matrix_info test_key_labels
+python3 -m unittest test_rgb_matrix_info test_key_labels test_keyboard_api
 ```
 
 ## License

@@ -108,7 +108,7 @@ Note:
 import usb.core
 import usb.util
 import sys
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # VIA Protocol Constants
 RAW_EPSIZE = 32
@@ -123,6 +123,7 @@ CMD_GET_KEYCODE = 0x04
 CMD_CUSTOM_SET_VALUE = 0x07
 CMD_CUSTOM_GET_VALUE = 0x08
 CMD_CUSTOM_SAVE = 0x09
+CMD_HOST_SLEEP = 0x50  # firmware extension: byte1 = 1 sleep, 0 wake, 2 query; reply byte1 = state after (1 asleep)
 CMD_GET_LAYER_COUNT = 0x11
 CMD_GET_MACRO_COUNT = 0x0C
 CMD_GET_MACRO_BUFFER_SIZE = 0x0D
@@ -239,8 +240,13 @@ class ViaKeyboard:
             except:
                 pass
 
-    def send_command(self, command_id: int, params: List[int] = None, verbose=False) -> Optional[bytearray]:
-        """Send a command and receive response"""
+    def send_command(self, command_id: int, params: List[int] = None, verbose=False,
+                     allow_unhandled: bool = False) -> Optional[bytearray]:
+        """Send a command and receive response.
+
+        A reply with command id 0xFF means the firmware does not know the command;
+        it is returned as None unless allow_unhandled is set.
+        """
         if not self.device or not self.out_endpoint or not self.in_endpoint:
             return None
 
@@ -286,7 +292,7 @@ class ViaKeyboard:
                 return None
 
             # Check for unhandled command
-            if response[0] == 0xFF:
+            if response[0] == 0xFF and not allow_unhandled:
                 if verbose:
                     print(f"  Command returned unhandled (0xFF)")
                 return None
@@ -388,6 +394,27 @@ class ViaKeyboard:
             # Response format: [command_id, channel_id, value_id, brightness]
             return response[3]
         return None
+
+    # Results of host_sleep_command()
+    SLEEP_OK = "ok"
+    SLEEP_UNSUPPORTED = "unsupported"   # firmware answered 0xFF (no sleep support)
+    SLEEP_NO_ANSWER = "no_answer"       # no usable reply
+
+    def host_sleep_command(self, action: int) -> Tuple[str, Optional[str]]:
+        """Send the firmware's sleep/wake command.
+
+        action: 1 = sleep, 0 = wake, 2 = query. Returns (status, state): status is
+        SLEEP_OK / SLEEP_UNSUPPORTED / SLEEP_NO_ANSWER and state is "asleep" or
+        "awake" (the state after the command) when status is SLEEP_OK, else None.
+        """
+        response = self.send_command(CMD_HOST_SLEEP, [action], allow_unhandled=True)
+        if not response:
+            return self.SLEEP_NO_ANSWER, None
+        if response[0] == 0xFF:
+            return self.SLEEP_UNSUPPORTED, None
+        if response[0] != CMD_HOST_SLEEP:
+            return self.SLEEP_NO_ANSWER, None
+        return self.SLEEP_OK, ("asleep" if response[1] == 1 else "awake")
 
     def get_rgb_matrix_value(self, value_id: int, length: int) -> Optional[List[int]]:
         """Read one RGB Matrix value via CMD_CUSTOM_GET_VALUE.
