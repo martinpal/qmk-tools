@@ -313,6 +313,7 @@ At the bottom of the overlay window it shows the keyboard's running RGB matrix e
 - **Value (V):** VIA reports `V * 255 / RGB_MATRIX_MAXIMUM_BRIGHTNESS`. The overlay converts it back to QMK's 0-255 scale (`byte * max / 255`), using `max_brightness` from `rgb_matrix_effects.json` (120 for the current firmware).
 - **Off / dimmed:** effect 0 is shown as `RGB off`. An effect with `V 0` is shown with `(dimmed)`: the matrix is still enabled (indicators and reactive effects stay lit), only the base brightness is zero, which is what the firmware's own RGB toggle key does.
 - **Hue/saturation** are only meaningful for effects that use them (e.g. Cycle Pinwheel ignores hue).
+- **Key labels:** the RGB keys on a layer are shown with short labels (`RGB⏻`, `RGB▶`, `RGB◀`, `H+`/`H-`, `S+`/`S-`, `V+`/`V-`, `SPD+`/`SPD-`, ...) for both RGB matrix keys (`RM_*`) and underglow keys (`UG_*`); the table is `RGB_KEY_LABELS` in `rgb_matrix_info.py`.
 - **Effect names:** effect numbers follow the enum order of the effects enabled in the keyboard firmware, so they change when that list changes. The table lives in one place, `rgb_matrix_effects.json`; update it with the firmware. Unknown numbers are shown as `effect N`.
 
 The firmware needs VIA enabled with the RGB matrix channel. The exact values returned by real hardware have not yet been checked against this documentation.

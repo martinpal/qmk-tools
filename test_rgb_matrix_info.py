@@ -37,6 +37,20 @@ class TestRgbMatrixInfo(unittest.TestCase):
         self.assertEqual(info.real_value(0, 120), 0)
         self.assertEqual(info.real_value(128, 120), 60)
 
+    def test_key_labels_rgb_matrix_and_underglow(self):
+        # layer 4 keys of the RGB matrix firmware: RM_TOGG, RM_NEXT, RM_PREV, RM_HUEU, ...
+        expected = {"RGB(0x42)": "RGB\u23fb", "RGB(0x43)": "RGB\u25b6", "RGB(0x44)": "RGB\u25c0",
+                    "RGB(0x45)": "H+", "RGB(0x46)": "H-", "RGB(0x47)": "S+", "RGB(0x48)": "S-",
+                    "RGB(0x49)": "V+", "RGB(0x4A)": "V-",
+                    "RGB(0x22)": "RGB\u25c0", "RGB(0x29)": "SPD+"}  # old underglow keys still work
+        for name, label in expected.items():
+            self.assertEqual(info.rgb_key_label(name), label, name)
+
+    def test_key_label_ignores_other_names(self):
+        self.assertIsNone(info.rgb_key_label("RGB(0xFF)"))
+        self.assertIsNone(info.rgb_key_label("RGB(0xZZ)"))
+        self.assertIsNone(info.rgb_key_label("KC_A"))
+
 
 if __name__ == "__main__":
     unittest.main()

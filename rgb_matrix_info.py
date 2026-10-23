@@ -51,3 +51,36 @@ def format_state(state: Optional[dict], max_brightness: int, names: Dict[int, st
     if value == 0:
         text += " (dimmed)"
     return text
+
+
+# Short overlay labels for the RGB keycodes (offset from 0x7800, as in QMK's keycode map).
+# 0x20-0x2A are the underglow (rgblight) keys, 0x40-0x4E the RGB matrix keys.
+RGB_KEY_LABELS = {
+    0x20: "RGB\u23fb",   # UG_TOGG
+    0x21: "RGB\u25b6",   # UG_NEXT
+    0x22: "RGB\u25c0",   # UG_PREV
+    0x23: "H+", 0x24: "H-",     # UG_HUEU / UG_HUED
+    0x25: "S+", 0x26: "S-",     # UG_SATU / UG_SATD
+    0x27: "V+", 0x28: "V-",     # UG_VALU / UG_VALD
+    0x29: "SPD+", 0x2A: "SPD-",  # UG_SPDU / UG_SPDD
+    0x40: "RGB on",   # RM_ON
+    0x41: "RGB off",  # RM_OFF
+    0x42: "RGB\u23fb",   # RM_TOGG
+    0x43: "RGB\u25b6",   # RM_NEXT
+    0x44: "RGB\u25c0",   # RM_PREV
+    0x45: "H+", 0x46: "H-",     # RM_HUEU / RM_HUED
+    0x47: "S+", 0x48: "S-",     # RM_SATU / RM_SATD
+    0x49: "V+", 0x4A: "V-",     # RM_VALU / RM_VALD
+    0x4B: "SPD+", 0x4C: "SPD-",  # RM_SPDU / RM_SPDD
+    0x4D: "FLG+", 0x4E: "FLG-",  # RM_FLGN / RM_FLGP
+}
+
+
+def rgb_key_label(name: str) -> Optional[str]:
+    """Short label for a key name of the form "RGB(0xNN)", else None."""
+    if not (name.startswith("RGB(0x") and name.endswith(")")):
+        return None
+    try:
+        return RGB_KEY_LABELS.get(int(name[6:-1], 16))
+    except ValueError:
+        return None

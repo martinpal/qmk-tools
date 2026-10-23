@@ -710,26 +710,7 @@ class KeyboardOverlay(QWidget):
                 key_name = char_map[key_name]
 
             # Improve RGB key display names - handle RGB(0xXX) format
-            if key_name.startswith('RGB(0x') and key_name.endswith(')'):
-                # Extract the hex value: "RGB(0x22)" -> "22"
-                rgb_hex = key_name[6:-1]
-                rgb_code = int(rgb_hex, 16)
-
-                rgb_map = {
-                    0x20: 'RGB⏻',     # RGB_TOG - Toggle
-                    0x21: 'RGB▶',     # RGB_MOD - Mode next
-                    0x22: 'RGB◀',     # RGB_RMOD - Mode previous
-                    0x23: 'H+',       # RGB_HUI - Hue increase
-                    0x24: 'H-',       # RGB_HUD - Hue decrease
-                    0x25: 'S+',       # RGB_SAI - Saturation increase
-                    0x26: 'S-',       # RGB_SAD - Saturation decrease
-                    0x27: 'V+',       # RGB_VAI - Value/brightness increase
-                    0x28: 'V-',       # RGB_VAD - Value/brightness decrease
-                    0x29: 'SPD+',     # RGB_SPI - Speed increase
-                    0x2A: 'SPD-',     # RGB_SPD - Speed decrease
-                }
-                if rgb_code in rgb_map:
-                    key_name = rgb_map[rgb_code]
+            key_name = rgb_matrix_info.rgb_key_label(key_name) or key_name
 
         # Make it shorter for display
         if len(key_name) > 8:
