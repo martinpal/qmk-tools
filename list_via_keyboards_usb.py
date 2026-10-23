@@ -389,6 +389,34 @@ class ViaKeyboard:
             return response[3]
         return None
 
+    def get_rgb_matrix_value(self, value_id: int, length: int) -> Optional[List[int]]:
+        """Read one RGB Matrix value via CMD_CUSTOM_GET_VALUE.
+
+        Response format: [command_id, channel_id, value_id, data...]. Returns the
+        `length` data bytes, or None if the keyboard did not answer or answered
+        with something else.
+        """
+        response = self.send_command(CMD_CUSTOM_GET_VALUE, [CHANNEL_RGB_MATRIX, value_id])
+        if (response and response[0] == CMD_CUSTOM_GET_VALUE
+                and response[1] == CHANNEL_RGB_MATRIX and response[2] == value_id):
+            return list(response[3:3 + length])
+        return None
+
+    def get_rgb_matrix_state(self) -> Optional[dict]:
+        """Brightness byte, effect number (0 = off), speed, hue and saturation.
+
+        The brightness is the raw VIA byte (V * 255 / RGB_MATRIX_MAXIMUM_BRIGHTNESS).
+        Returns None unless every value could be read.
+        """
+        brightness = self.get_rgb_matrix_value(RGB_MATRIX_BRIGHTNESS, 1)
+        effect = self.get_rgb_matrix_value(RGB_MATRIX_EFFECT, 1)
+        speed = self.get_rgb_matrix_value(RGB_MATRIX_EFFECT_SPEED, 1)
+        color = self.get_rgb_matrix_value(RGB_MATRIX_COLOR, 2)
+        if not (brightness and effect and speed and color and len(color) == 2):
+            return None
+        return {"brightness": brightness[0], "effect": effect[0], "speed": speed[0],
+                "hue": color[0], "sat": color[1]}
+
     def set_rgb_brightness(self, brightness: int, save: bool = False, verbose: bool = False) -> bool:
         """Set RGB brightness (0-255) - tries both RGBLIGHT and RGB_MATRIX
 

@@ -46,6 +46,7 @@ except ImportError:
 
 # Import our USB keyboard interface
 import list_via_keyboards_usb as via
+import rgb_matrix_info
 
 # Import boblight client (optional)
 try:
@@ -64,6 +65,11 @@ class LayerUpdateSignal(QObject):
 class InteractiveSignal(QObject):
     """Signal emitter for interactive mode changes"""
     interactive_changed = pyqtSignal(bool)  # interactive state
+
+
+class RgbEffectSignal(QObject):
+    """Signal emitter for the RGB matrix effect description"""
+    text_changed = pyqtSignal(str)
 
 
 class OnTopSignal(QObject):
@@ -298,6 +304,13 @@ class KeyboardOverlay(QWidget):
         self.header_label.setStyleSheet("background-color: rgba(0, 0, 0, 200); color: black; padding: 3px; border-radius: 3px;")  # Reduced padding
         layout.addWidget(self.header_label)
 
+        # Running RGB matrix effect (filled in by the keyboard monitor)
+        self.rgb_label = QLabel("")
+        self.rgb_label.setAlignment(Qt.AlignCenter)
+        self.rgb_label.setFont(QFont("Monospace", 9))
+        self.rgb_label.setStyleSheet("background-color: rgba(0, 0, 0, 160); color: white; padding: 1px; border-radius: 3px;")
+        layout.addWidget(self.rgb_label)
+
         # Keyboard grid
         self.grid_layout = QGridLayout()
         self.grid_layout.setSpacing(0)  # No spacing between keys
@@ -310,11 +323,11 @@ class KeyboardOverlay(QWidget):
         if self.is_split:
             # Split keyboard: two halves side by side + separator (2px)
             width = (self.cols * 2) * 45 + 2 + 20
-            height = self.rows_per_half * 30 + 50  # +50 for header only (removed info label)
+            height = self.rows_per_half * 30 + 50 + 22  # header + RGB effect label
         else:
             # Normal keyboard
             width = self.cols * 45 + 20
-            height = self.rows * 30 + 50  # +50 for header only
+            height = self.rows * 30 + 50 + 22  # header + RGB effect label
         self.resize(width, height)
         self.move(self.window_x, self.window_y)
 
@@ -760,6 +773,11 @@ class KeyboardOverlay(QWidget):
         """)
 
         return label
+
+    def set_rgb_effect_text(self, text: str):
+        """Show the RGB matrix effect description (empty text hides it)"""
+        self.rgb_label.setText(text)
+        self.rgb_label.setVisible(bool(text))
 
     def update_header(self):
         """Update the header with layer info"""
@@ -1337,6 +1355,17 @@ class KeyboardMonitor(threading.Thread):
         self.on_top_signal = OnTopSignal()
         self.on_top_signal.on_top_changed.connect(overlay.set_window_on_top)
 
+        # Signal for the RGB matrix effect description
+        self.rgb_effect_signal = RgbEffectSignal()
+        self.rgb_effect_signal.text_changed.connect(overlay.set_rgb_effect_text)
+        self.rgb_max_brightness, self.rgb_effect_names = rgb_matrix_info.load_table()
+        # The four RGB values are read one per tick so a poll never stalls the
+        # matrix scan for more than a single USB round trip
+        self.rgb_state = {}
+        self.rgb_poll_step = 0
+        self.rgb_next_poll = 0.0
+        self.rgb_last_text = None
+
         # Create signal for thread-safe keyboard reconnection
         self.reconnect_signal = ReconnectSignal()
         self.reconnect_signal.reconnected.connect(overlay.on_keyboard_reconnected)
@@ -1622,12 +1651,52 @@ class KeyboardMonitor(threading.Thread):
                 if self.heatmap:
                     self.heatmap.tick()
 
+                self._poll_rgb_effect()
+
                 self.prev_state = current_state
                 time.sleep(0.007)  # ~150Hz polling (was 0.02 = 50Hz, 3x faster)
 
             except Exception as e:
                 print(f"Error in keyboard monitor: {e}")
                 time.sleep(1)
+
+    RGB_POLL_INTERVAL = 0.25  # seconds between single-value reads (all four every ~1 s)
+    RGB_POLL_BACKOFF = 10.0   # seconds to wait after a failed read (e.g. firmware without RGB matrix)
+
+    def _poll_rgb_effect(self):
+        """Read one RGB matrix value per call and publish the description when it changes."""
+        now = time.time()
+        if now < self.rgb_next_poll:
+            return
+        self.rgb_next_poll = now + self.RGB_POLL_INTERVAL
+
+        step = self.rgb_poll_step
+        self.rgb_poll_step = (step + 1) % 4
+        if step == 0:
+            data = self.keyboard.get_rgb_matrix_value(via.RGB_MATRIX_BRIGHTNESS, 1)
+            key = ("brightness",)
+        elif step == 1:
+            data = self.keyboard.get_rgb_matrix_value(via.RGB_MATRIX_EFFECT, 1)
+            key = ("effect",)
+        elif step == 2:
+            data = self.keyboard.get_rgb_matrix_value(via.RGB_MATRIX_EFFECT_SPEED, 1)
+            key = ("speed",)
+        else:
+            data = self.keyboard.get_rgb_matrix_value(via.RGB_MATRIX_COLOR, 2)
+            key = ("hue", "sat")
+
+        if not data or len(data) != len(key):
+            self.rgb_next_poll = now + self.RGB_POLL_BACKOFF
+            self.rgb_state = {}
+        else:
+            self.rgb_state.update(zip(key, data))
+
+        text = ""
+        if len(self.rgb_state) == 5:
+            text = rgb_matrix_info.format_state(self.rgb_state, self.rgb_max_brightness, self.rgb_effect_names)
+        if text != self.rgb_last_text:
+            self.rgb_last_text = text
+            self.rgb_effect_signal.text_changed.emit(text)
 
     def _find_brightness_key(self, row: int, col: int, layer: int) -> Optional[dict]:
         """Look up a brightness key binding matching (row, col, layer), if any."""

@@ -7,6 +7,7 @@ Collection of tools for QMK keyboards, including a real-time keyboard overlay GU
 ### Keyboard Overlay GUI
 - **Real-time layer indicator** - Shows current active layer with color coding
 - **DF(X) layer display** - Shows default layer when changed
+- **RGB matrix effect line** - Shows the running effect and its parameters, e.g. `Cycle Pinwheel · speed 128 · H 200 S 255 V 120` (see [RGB Matrix Effect Line](#rgb-matrix-effect-line))
 - **Always-on-top window** - Stays visible while typing (10-second timer after losing focus)
 - **Click-through transparent window** - Doesn't interfere with your workflow
 - **GNOME Shell integration** - Layer indicator in the top bar
@@ -304,6 +305,18 @@ Summarize with `heatmap_report.py`:
 ./heatmap_report.py --csv > keys.csv
 ```
 
+### RGB Matrix Effect Line
+
+Under the layer header the overlay shows the keyboard's running RGB matrix effect, read over the VIA protocol (`CMD_CUSTOM_GET_VALUE`, RGB matrix channel): effect name, effect speed, hue, saturation and value.
+
+- **Polling:** one value is read every 0.25 s by the keyboard monitor thread (the same thread and USB endpoint as the matrix polling), so all four values refresh about once a second and a read never stalls the matrix scan for more than one USB round trip. If a read fails (for example firmware without an RGB matrix) the line is hidden and the overlay retries after 10 s.
+- **Value (V):** VIA reports `V * 255 / RGB_MATRIX_MAXIMUM_BRIGHTNESS`. The overlay converts it back to QMK's 0-255 scale (`byte * max / 255`), using `max_brightness` from `rgb_matrix_effects.json` (120 for the current firmware).
+- **Off / dimmed:** effect 0 is shown as `RGB off`. An effect with `V 0` is shown with `(dimmed)`: the matrix is still enabled (indicators and reactive effects stay lit), only the base brightness is zero, which is what the firmware's own RGB toggle key does.
+- **Hue/saturation** are only meaningful for effects that use them (e.g. Cycle Pinwheel ignores hue).
+- **Effect names:** effect numbers follow the enum order of the effects enabled in the keyboard firmware, so they change when that list changes. The table lives in one place, `rgb_matrix_effects.json`; update it with the firmware. Unknown numbers are shown as `effect N`.
+
+The firmware needs VIA enabled with the RGB matrix channel. The exact values returned by real hardware have not yet been checked against this documentation.
+
 ## Components
 
 ### keyboard_overlay_gui.py
@@ -325,6 +338,9 @@ GNOME Shell extension that displays the current keyboard layer in the top bar wi
 
 ### list_via_keyboards_usb.py
 VIA protocol implementation for USB HID communication with QMK keyboards.
+
+### rgb_matrix_info.py / rgb_matrix_effects.json
+Formatting of the RGB matrix effect line and the effect-number → name table (see [RGB Matrix Effect Line](#rgb-matrix-effect-line)).
 
 ### corsair_mouse_monitor.py
 Monitors Corsair wireless mice for battery and DPI status.
@@ -386,6 +402,11 @@ python3 test_gnome_indicator.py
 ```
 
 This sends test layer updates to verify the GNOME Shell extension is working.
+
+### Testing the RGB effect formatting
+```bash
+python3 -m unittest test_rgb_matrix_info
+```
 
 ## License
 
