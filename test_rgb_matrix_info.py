@@ -5,12 +5,11 @@ import rgb_matrix_info as info
 
 class TestRgbMatrixInfo(unittest.TestCase):
     def setUp(self):
-        self.max_v, self.names = info.load_table()
+        self.max_v = info.load_max_brightness()
+        self.names = {18: "Cycle Pinwheel", 51: "Game of Life"}
 
-    def test_table_loaded(self):
+    def test_max_brightness_loaded(self):
         self.assertEqual(self.max_v, 120)
-        self.assertEqual(len(self.names), 50)
-        self.assertEqual(self.names[18], "CYCLE_PINWHEEL")
 
     def test_default_effect(self):
         state = {"effect": 18, "speed": 128, "hue": 200, "sat": 255, "brightness": 255}
@@ -28,6 +27,10 @@ class TestRgbMatrixInfo(unittest.TestCase):
     def test_unknown_effect(self):
         state = {"effect": 99, "speed": 1, "hue": 1, "sat": 2, "brightness": 255}
         self.assertTrue(info.format_state(state, self.max_v, self.names).startswith("effect 99 "))
+
+    def test_no_names_from_firmware(self):
+        state = {"effect": 18, "speed": 1, "hue": 1, "sat": 2, "brightness": 255}
+        self.assertTrue(info.format_state(state, self.max_v, {}).startswith("effect 18 "))
 
     def test_no_answer(self):
         self.assertEqual(info.format_state(None, self.max_v, self.names), "")

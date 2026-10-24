@@ -1,33 +1,26 @@
 #!/usr/bin/env python3
 """Describe the keyboard's running RGB matrix effect for the overlay.
 
-The effect table lives in rgb_matrix_effects.json (next to this file) because
-the effect numbers follow the enum order of the effects enabled in the
-firmware and change when that list changes.
+Effect names are not kept here: the firmware serves them (see
+ViaKeyboard.get_effect_names). Only the maximum brightness, which VIA
+does not report, lives in rgb_matrix_effects.json next to this file.
 """
 
 import json
 import os
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 DEFAULT_TABLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rgb_matrix_effects.json")
 
 
-def load_table(path: str = DEFAULT_TABLE) -> Tuple[int, Dict[int, str]]:
-    """Return (max_brightness, {effect number: enum name}); empty table on any error."""
+def load_max_brightness(path: str = DEFAULT_TABLE) -> int:
+    """The firmware's RGB_MATRIX_MAXIMUM_BRIGHTNESS; 255 on any error."""
     try:
         with open(path) as f:
-            data = json.load(f)
-        names = {int(k): v for k, v in data.get("effects", {}).items()}
-        return int(data.get("max_brightness", 255)), names
+            return int(json.load(f).get("max_brightness", 255))
     except (OSError, ValueError, TypeError) as e:
-        print(f"Warning: could not read RGB effect table {path}: {e}")
-        return 255, {}
-
-
-def humanize(name: str) -> str:
-    """CYCLE_PINWHEEL -> Cycle Pinwheel"""
-    return name.replace("_", " ").title()
+        print(f"Warning: could not read {path}: {e}")
+        return 255
 
 
 def real_value(brightness_byte: int, max_brightness: int) -> int:
@@ -36,6 +29,7 @@ def real_value(brightness_byte: int, max_brightness: int) -> int:
 
 
 def format_state(state: Optional[dict], max_brightness: int, names: Dict[int, str]) -> str:
+    # names: {effect number: display name} as served by the firmware; may be empty
     """One-line description, or '' when the keyboard did not answer.
 
     state keys: effect, speed, hue, sat, brightness (raw VIA byte).
@@ -45,7 +39,7 @@ def format_state(state: Optional[dict], max_brightness: int, names: Dict[int, st
     effect = state["effect"]
     if effect == 0:
         return "RGB off"
-    name = humanize(names[effect]) if effect in names else f"effect {effect}"
+    name = names.get(effect, f"effect {effect}")
     value = real_value(state["brightness"], max_brightness)
     text = f"{name} · speed {state['speed']} · H {state['hue']} S {state['sat']} V {value}"
     if value == 0:

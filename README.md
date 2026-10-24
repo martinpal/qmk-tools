@@ -314,7 +314,7 @@ At the bottom of the overlay window it shows the keyboard's running RGB matrix e
 - **Off / dimmed:** effect 0 is shown as `RGB off`. An effect with `V 0` is shown with `(dimmed)`: the matrix is still enabled (indicators and reactive effects stay lit), only the base brightness is zero, which is what the firmware's own RGB toggle key does.
 - **Hue/saturation** are only meaningful for effects that use them (e.g. Cycle Pinwheel ignores hue).
 - **Key labels:** the RGB keys on a layer are shown with short labels (`RGB⏻`, `RGB▶`, `RGB◀`, `H+`/`H-`, `S+`/`S-`, `V+`/`V-`, `SPD+`/`SPD-`, ...) for both RGB matrix keys (`RM_*`) and underglow keys (`UG_*`); the table is `RGB_KEY_LABELS` in `rgb_matrix_info.py`.
-- **Effect names:** effect numbers follow the enum order of the effects enabled in the keyboard firmware, so they change when that list changes. The table lives in one place, `rgb_matrix_effects.json`; update it with the firmware. Unknown numbers are shown as `effect N`.
+- **Effect names:** none are stored in the overlay. At start-up and after a reconnect it asks the firmware (VIA raw command `0x51`: byte 1 = 0 gives the effect count, byte 1 = 2 plus an effect number gives the display name, e.g. `Game of Life`) and caches the result, because the effect list changes with the firmware. If the firmware does not know the command (reply byte 0 = `0xFF`) or returns an empty name, the line shows `effect N`.
 
 The firmware needs VIA enabled with the RGB matrix channel. The exact values returned by real hardware have not yet been checked against this documentation.
 
@@ -370,7 +370,7 @@ Local HTTP API and the thread-safe gateway to the USB thread (see [Keyboard slee
 Short overlay labels for `QK_` keycodes (`BOOTLDR`, `REBOOT`, `EE CLR`, `DEBUG`, `MAKE`, `ESC~`) and the warning borders of dangerous keys: clear EEPROM has a red border, bootloader and reboot an orange one.
 
 ### rgb_matrix_info.py / rgb_matrix_effects.json
-Formatting of the RGB matrix effect line and the effect-number → name table (see [RGB Matrix Effect Line](#rgb-matrix-effect-line)).
+Formatting of the RGB matrix effect line; `rgb_matrix_effects.json` only holds the maximum brightness (see [RGB Matrix Effect Line](#rgb-matrix-effect-line)).
 
 ### corsair_mouse_monitor.py
 Monitors Corsair wireless mice for battery and DPI status.
@@ -435,7 +435,7 @@ This sends test layer updates to verify the GNOME Shell extension is working.
 
 ### Testing the RGB effect formatting, key labels and the HTTP API
 ```bash
-python3 -m unittest test_rgb_matrix_info test_key_labels test_keyboard_api
+python3 -m unittest test_rgb_matrix_info test_key_labels test_keyboard_api test_effect_names
 ```
 
 ## License

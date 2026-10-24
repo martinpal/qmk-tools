@@ -123,6 +123,7 @@ CMD_GET_KEYCODE = 0x04
 CMD_CUSTOM_SET_VALUE = 0x07
 CMD_CUSTOM_GET_VALUE = 0x08
 CMD_CUSTOM_SAVE = 0x09
+CMD_RGB_EFFECT_NAMES = 0x51  # firmware extension: byte1 = 0 count, 1 identifier, 2 display name; byte2 = effect number
 CMD_HOST_SLEEP = 0x50  # firmware extension: byte1 = 1 sleep, 0 wake, 2 query; reply byte1 = state after (1 asleep)
 CMD_GET_LAYER_COUNT = 0x11
 CMD_GET_MACRO_COUNT = 0x0C
@@ -415,6 +416,25 @@ class ViaKeyboard:
         if response[0] != CMD_HOST_SLEEP:
             return self.SLEEP_NO_ANSWER, None
         return self.SLEEP_OK, ("asleep" if response[1] == 1 else "awake")
+
+    def get_effect_names(self) -> dict:
+        """Ask the firmware for the display names of its RGB matrix effects.
+
+        Returns {effect number: name}. Empty when the firmware lacks the command
+        (it answers 0xFF) or does not answer; effects with an empty name are left out.
+        """
+        response = self.send_command(CMD_RGB_EFFECT_NAMES, [0], allow_unhandled=True)
+        if not response or response[0] != CMD_RGB_EFFECT_NAMES or response[1] != 0:
+            return {}
+        names = {}
+        for number in range(0, response[2] + 1):
+            reply = self.send_command(CMD_RGB_EFFECT_NAMES, [2, number], allow_unhandled=True)
+            if not reply or reply[0] != CMD_RGB_EFFECT_NAMES or reply[1] != 2 or reply[2] != number:
+                continue
+            name = bytes(reply[3:32]).split(b"\0", 1)[0].decode("utf-8", "replace")
+            if name:
+                names[number] = name
+        return names
 
     def get_rgb_matrix_value(self, value_id: int, length: int) -> Optional[List[int]]:
         """Read one RGB Matrix value via CMD_CUSTOM_GET_VALUE.

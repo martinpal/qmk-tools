@@ -1351,7 +1351,8 @@ class KeyboardMonitor(threading.Thread):
         # Signal for the RGB matrix effect description
         self.rgb_effect_signal = RgbEffectSignal()
         self.rgb_effect_signal.text_changed.connect(overlay.set_rgb_effect_text)
-        self.rgb_max_brightness, self.rgb_effect_names = rgb_matrix_info.load_table()
+        self.rgb_max_brightness = rgb_matrix_info.load_max_brightness()
+        self.rgb_effect_names = keyboard.get_effect_names()
         # The four RGB values are read one per tick so a poll never stalls the
         # matrix scan for more than a single USB round trip
         self.rgb_state = {}
@@ -1468,6 +1469,8 @@ class KeyboardMonitor(threading.Thread):
         # Success! Replace keyboard handle
         self.keyboard = new_keyboard
         self.overlay.keyboard = new_keyboard
+        # The effect list changes with the firmware
+        self.rgb_effect_names = new_keyboard.get_effect_names()
         print(f"✓ Successfully reconnected to {self.keyboard_name}")
 
         # Reset layer state
