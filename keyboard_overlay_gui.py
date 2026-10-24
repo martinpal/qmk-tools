@@ -1224,7 +1224,13 @@ class KeyboardOverlay(QWidget):
     def on_keyboard_reconnected(self):
         """Called when keyboard is reconnected - reload layers in main thread"""
         print("Reloading keyboard layers after reconnection...")
-        self.load_layers()
+        try:
+            self.load_layers()
+        except Exception as e:
+            # An uncaught exception in a Qt slot aborts the whole process
+            print(f"Layer reload failed: {e}")
+            self.reloading_layers = False
+            return
 
         if self.all_layers and len(self.all_layers) == self.keyboard.layer_count:
             print("Layer reload successful")
@@ -1457,6 +1463,12 @@ class KeyboardMonitor(threading.Thread):
         # Verify matrix size was detected
         if not new_keyboard.matrix_rows or not new_keyboard.matrix_cols:
             print(f"Failed to detect keyboard matrix size")
+            new_keyboard.close()
+            return False
+
+        # Right after a reset the keyboard may answer only some queries
+        if not new_keyboard.layer_count:
+            print("Keyboard did not report its layer count yet")
             new_keyboard.close()
             return False
 
