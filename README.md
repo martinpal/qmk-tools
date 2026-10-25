@@ -305,6 +305,23 @@ Summarize with `heatmap_report.py`:
 ./heatmap_report.py --csv > keys.csv
 ```
 
+### Habit Sounds (Optional)
+
+Audible feedback for retraining muscle memory, for example after moving Esc and Backspace to the thumb cluster:
+
+- **Old pinky keys:** a harsh, low buzz when a key press resolves to Esc, Grave-Esc, Grave (`` ` ``/`~`, as on the Lower layer's old Esc position), Backspace or Delete in one of the two outer columns of either half (thumb row excluded). It looks at the keymap read from the keyboard, so it follows the layer you are on. For example Backspace on the Raise layer's right pinky key triggers it, the thumb Backspace does not.
+- **Top row:** a short, mild blip when a key in the top row of either half (not a `KC_NO` key) is pressed on a layer in `top_row_layers` (default base, Lower and Raise: 0, 2, 3).
+- **Cooldown:** each kind plays at most once per `cooldown` seconds (default 5), so a burst of presses makes one sound.
+
+Enable it in `config.yaml` (see `config.sample.yaml`):
+
+```yaml
+habit_sounds:
+  enabled: true
+```
+
+The overlay runs as root under sudo while the sound server belongs to you, so it first runs the player (`paplay`, `pw-play` or `aplay`, whichever is installed first) as root with `PULSE_SERVER` and `XDG_RUNTIME_DIR` pointing at your session (`SUDO_UID`), and if that fails as you through `sudo -n -u`. Every trigger is logged as `[HABIT] old_key at row R, col C, layer L`, and a failing player prints its exit code and error. The two short tones are generated at start-up into a temporary directory.
+
 ### RGB Matrix Effect Line
 
 At the bottom of the overlay window it shows the keyboard's running RGB matrix effect, read over the VIA protocol (`CMD_CUSTOM_GET_VALUE`, RGB matrix channel): effect name, effect speed, hue, saturation and value.
@@ -368,6 +385,9 @@ Local HTTP API and the thread-safe gateway to the USB thread (see [Keyboard slee
 
 ### key_labels.py
 Short overlay labels for `QK_` keycodes (`BOOTLDR`, `REBOOT`, `EE CLR`, `DEBUG`, `MAKE`, `ESC~`) and the warning borders of dangerous keys: clear EEPROM has a red border, bootloader and reboot an orange one.
+
+### habit_sounds.py
+Classifies key presses (old pinky key / top row), applies the cooldown and plays the sounds (see [Habit Sounds](#habit-sounds-optional)).
 
 ### rgb_matrix_info.py / rgb_matrix_effects.json
 Formatting of the RGB matrix effect line; `rgb_matrix_effects.json` only holds the maximum brightness (see [RGB Matrix Effect Line](#rgb-matrix-effect-line)).
@@ -435,7 +455,7 @@ This sends test layer updates to verify the GNOME Shell extension is working.
 
 ### Testing the RGB effect formatting, key labels and the HTTP API
 ```bash
-python3 -m unittest test_rgb_matrix_info test_key_labels test_keyboard_api test_effect_names
+python3 -m unittest test_rgb_matrix_info test_key_labels test_keyboard_api test_effect_names test_habit_sounds
 ```
 
 ## License

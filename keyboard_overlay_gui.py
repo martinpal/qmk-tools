@@ -1317,9 +1317,10 @@ class KeyboardMonitor(threading.Thread):
     """Monitor keyboard layer changes via USB"""
 
     def __init__(self, keyboard, overlay: KeyboardOverlay, rows: int, cols: int, brightness_keys: list = None,
-                 heatmap=None, gateway=None):
+                 heatmap=None, gateway=None, habit_coach=None):
         super().__init__(daemon=True)
         self.keyboard = keyboard
+        self.habit_coach = habit_coach  # optional habit_sounds.HabitCoach
         self.heatmap = heatmap  # optional HeatmapLogger
         self.gateway = gateway or keyboard_api.KeyboardGateway()  # sleep/wake requests from the HTTP API
         self.overlay = overlay
@@ -1623,6 +1624,8 @@ class KeyboardMonitor(threading.Thread):
                                     self.pressed_keys[(row, col)] = keycode
                                 else:
                                     keycode = 0x0000  # No-op if layers aren't loaded yet
+                                if self.habit_coach:
+                                    self.habit_coach.on_press(row, col, self.current_layer, keycode)
                             else:
                                 # Key released - use remembered keycode
                                 keycode = self.pressed_keys.get((row, col), 0x0000)
@@ -2232,9 +2235,19 @@ def main():
             flush_interval=float(raw_heatmap.get('flush_interval', 5)))
         print(f"[HEATMAP] Logging key events to {heatmap.directory} (rollover {heatmap.rollover_hour:02d}:00)")
 
+    habit_coach = None
+    raw_habit = config.get('habit_sounds', {}) or {}
+    if raw_habit.get('enabled'):
+        from habit_sounds import HabitCoach
+        top_layers = [int(l) for l in raw_habit.get('top_row_layers', [0, 2, 3])]
+        habit_coach = HabitCoach(rows, top_row_layers=top_layers,
+                                 cooldown=float(raw_habit.get('cooldown', 5)))
+        print(f"[HABIT] Sound feedback enabled (cooldown {habit_coach.cooldown:g} s, top row on layers {top_layers})")
+
     gateway = keyboard_api.KeyboardGateway()
     keyboard_monitor = KeyboardMonitor(keyboard, overlay, rows, cols,
-                                       brightness_keys=brightness_keys, heatmap=heatmap, gateway=gateway)
+                                       brightness_keys=brightness_keys, heatmap=heatmap, gateway=gateway,
+                                       habit_coach=habit_coach)
     keyboard_monitor.start()
 
     api_server = None
@@ -2264,6 +2277,8 @@ def main():
         if heatmap:
             keyboard_monitor.join(timeout=1)
             heatmap.close()
+        if habit_coach:
+            habit_coach.close()
         keyboard.close()
         # Stop Home Assistant polling if enabled
         if ha_client:

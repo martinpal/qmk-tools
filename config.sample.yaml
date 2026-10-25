@@ -258,3 +258,19 @@ heatmap:
 
   # Seconds between disk writes (events are also flushed every 4 KB)
   # flush_interval: 5
+
+# -----------------------------------------------------------------------------
+# Habit sounds - audible nudge while retraining muscle memory
+# -----------------------------------------------------------------------------
+# A harsh buzz when a pinky presses an old Esc / Grave-Esc / Grave / Backspace / Delete
+# key (outer two columns of either half), a mild blip when a finger reaches for
+# the top row on top_row_layers. Each kind sounds at most once per cooldown.
+# Sound is played through paplay / pw-play / aplay as the user who ran sudo.
+habit_sounds:
+  # enabled: false
+
+  # Seconds before the same kind of sound can play again
+  # cooldown: 5
+
+  # Layers on which the top row triggers the blip (0 base, 2 lower, 3 raise)
+  # top_row_layers: [0, 2, 3]
