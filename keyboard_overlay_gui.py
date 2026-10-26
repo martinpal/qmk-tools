@@ -30,8 +30,8 @@ from typing import Optional, List, Tuple
 
 # Qt imports
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QGridLayout, QSizePolicy
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
-from PyQt5.QtGui import QPalette, QColor, QFont
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject, QRect
+from PyQt5.QtGui import QPalette, QColor, QFont, QImage, QPainter, QPen
 
 # X11 imports for click-through and global hotkeys
 try:
@@ -47,6 +47,8 @@ except ImportError:
 # Import our USB keyboard interface
 import list_via_keyboards_usb as via
 import rgb_matrix_info
+import layer_tap
+import key_style
 import key_labels
 import keyboard_api
 
@@ -156,6 +158,57 @@ class GnomeIndicatorBridge:
                 self.proxy.SetLayer(layer_name, layer_color)
             except Exception as e:
                 print(f"GNOME indicator: D-Bus error - {e}")
+
+
+class HatchedLabel(QLabel):
+    """Key label with a diagonal stripe pattern around the text (for dangerous keys).
+
+    Style sheets cannot draw stripes, so the background and stripes are painted
+    here and the style sheet is left to draw only the border and the text.
+    """
+
+    STRIPE_SPACING = 6
+
+    def __init__(self, text: str, background: QColor, hatch: QColor):
+        super().__init__(text)
+        self.background = background
+        self.hatch = hatch
+
+    def _glyph_box(self) -> QRect:
+        """Bounding box of the drawn text in widget coordinates, measured on a scratch image
+        so it matches the pixels exactly (font metrics leave extra room for descenders)."""
+        area = self.contentsRect()
+        scratch = QImage(area.size(), QImage.Format_ARGB32)
+        scratch.fill(0)
+        p = QPainter(scratch)
+        p.setFont(self.font())
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(scratch.rect(), Qt.AlignCenter, self.text())
+        p.end()
+        xs, ys = [], []
+        for y in range(scratch.height()):
+            for x in range(scratch.width()):
+                if scratch.pixel(x, y) >> 24:
+                    xs.append(x)
+                    ys.append(y)
+        if not xs:
+            return QRect()
+        return QRect(area.left() + min(xs), area.top() + min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        inner = self.rect().adjusted(1, 1, -1, -1)
+        painter.fillRect(inner, self.background)
+        painter.setClipRect(inner)
+        painter.setPen(QPen(self.hatch, 2))
+        for x in range(-inner.height(), inner.width(), self.STRIPE_SPACING):
+            painter.drawLine(inner.left() + x, inner.bottom(), inner.left() + x + inner.height(), inner.top())
+        # Keep the text readable: no stripes in a padded box around the glyphs
+        text_box = self._glyph_box().adjusted(-3, -2, 3, 2)
+        painter.setClipping(False)
+        painter.fillRect(text_box.intersected(inner), self.background)
+        painter.end()
+        super().paintEvent(event)
 
 
 class KeyboardOverlay(QWidget):
@@ -535,6 +588,7 @@ class KeyboardOverlay(QWidget):
                         break
 
         key_name = self.keyboard.keycode_to_name(display_keycode)
+        layer_key = key_style.decode_layer_key(display_keycode)
 
         # Check if this is a simple modifier key (LCTL(KC_A), etc - range 0x0100-0x1FFF)
         is_simple_mod = 0x0100 <= display_keycode <= 0x1FFF
@@ -570,6 +624,12 @@ class KeyboardOverlay(QWidget):
                 0x00DC: 'W→',     # MS_WH_RIGHT (wheel right)
             }
             key_name = mouse_keys.get(display_keycode, f'MS_{display_keycode:02X}')
+        elif layer_key and layer_key.kind == "LT":
+            # Layer-tap: tap key on the first line, target layer below
+            tap_name = self.keyboard.keycode_to_name(layer_key.tap_keycode)
+            if tap_name.startswith("KC_"):
+                tap_name = tap_name[3:]
+            key_name = f"{tap_name}\n{self.layer_info.get(layer_key.layer, {}).get('name', f'L{layer_key.layer}')}"
         elif is_simple_mod:
             # Simple modifier keys like LCTL(KC_A) - range 0x0100-0x1FFF
             # Format: 0x0M00 | keycode where M is modifier bits
@@ -684,8 +744,8 @@ class KeyboardOverlay(QWidget):
                 except ValueError:
                     pass  # Keep original if parsing fails
 
-            # Replace DF(X) with layer name to show default layer set
-            elif key_name.startswith("DF(") and key_name.endswith(")"):
+            # Replace TG(X) and DF(X) with the layer name (they are told apart by the border style)
+            elif key_name[:3] in ("DF(", "TG(") and key_name.endswith(")"):
                 try:
                     layer_num = int(key_name[3:-1])
                     if layer_num in self.layer_info:
@@ -717,8 +777,7 @@ class KeyboardOverlay(QWidget):
             key_name = key_labels.short_label(key_name)
 
         # Make it shorter for display
-        if len(key_name) > 8:
-            key_name = key_name[:7] + "…"
+        key_name = "\n".join(line if len(line) <= 8 else line[:7] + "…" for line in key_name.split("\n"))
 
         label = QLabel(key_name)
         label.setAlignment(Qt.AlignCenter)
@@ -734,13 +793,6 @@ class KeyboardOverlay(QWidget):
         if mt_mod_color:
             bg_color = mt_mod_color
             text_color = QColor(255, 255, 255)  # White text for contrast
-        # Layer switching keys get special colors
-        elif 0x5220 <= keycode <= 0x523F:  # MO keys
-            bg_color = QColor(30, 60, 90)  # Darker blue
-        elif 0x5240 <= keycode <= 0x525F:  # DF keys
-            bg_color = QColor(90, 60, 30)  # Darker orange
-        elif 0x5260 <= keycode <= 0x527F:  # TG keys
-            bg_color = QColor(60, 90, 30)  # Darker green
         elif keycode == 0x0000:  # KC_NO
             bg_color = QColor(20, 20, 20)
             text_color = QColor(80, 80, 80)
@@ -748,15 +800,33 @@ class KeyboardOverlay(QWidget):
             bg_color = QColor(60, 60, 80)
             text_color = QColor(150, 150, 200)
 
-        # Keys that reboot or erase settings get a sharp warning border
+        # Keys that reboot or erase settings get a sharp warning border and diagonal stripes;
+        # layer keys get a border in the colour of the layer they lead to
         danger = key_labels.danger_border(display_keycode)
+        hatched = False
         if danger:
             border = f"2px solid rgb({danger[0]}, {danger[1]}, {danger[2]})"
+            hatched = True
+        elif layer_key:
+            color_name = self.layer_info.get(layer_key.layer, {}).get("color", "WHITE")
+            c = self.qt_colors.get(color_name, QColor(255, 255, 255))
+            border = f"2px {key_style.BORDER_STYLES[layer_key.kind]} rgb({c.red()}, {c.green()}, {c.blue()})"
         else:
             border = "1px solid rgba(100, 100, 100, 100)"
 
+        if hatched:
+            label = HatchedLabel(key_name, QColor(bg_color.red(), bg_color.green(), bg_color.blue(), 180),
+                                 QColor(danger[0], danger[1], danger[2], 110))
+            label.setAlignment(Qt.AlignCenter)
+            label.setFont(QFont("Monospace", 7))
+            label.setFixedSize(45, 30)
+            label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            background_css = "background-color: transparent;"
+        else:
+            background_css = f"background-color: rgba({bg_color.red()}, {bg_color.green()}, {bg_color.blue()}, 180);"
+
         label.setStyleSheet(f"""
-            background-color: rgba({bg_color.red()}, {bg_color.green()}, {bg_color.blue()}, 180);
+            {background_css}
             color: rgb({text_color.red()}, {text_color.green()}, {text_color.blue()});
             border: {border};
             border-radius: 2px;
@@ -1321,6 +1391,7 @@ class KeyboardMonitor(threading.Thread):
         super().__init__(daemon=True)
         self.keyboard = keyboard
         self.habit_coach = habit_coach  # optional habit_sounds.HabitCoach
+        self.layer_taps = layer_tap.LayerTapTracker()
         self.heatmap = heatmap  # optional HeatmapLogger
         self.gateway = gateway or keyboard_api.KeyboardGateway()  # sleep/wake requests from the HTTP API
         self.overlay = overlay
@@ -1490,6 +1561,7 @@ class KeyboardMonitor(threading.Thread):
         self.current_layer = 0
         self.default_layer = 0
         self.active_layer_stack = {}
+        self.layer_taps.reset()
         self.pressed_keys = {}
         self.brightness_key_state = {}
 
@@ -1616,6 +1688,9 @@ class KeyboardMonitor(threading.Thread):
                                         self.brightness_key_state.pop((row, col), None)
 
                             if pressed:
+                                # A layer-tap that is still down turns into a hold once another key goes down
+                                for held in self.layer_taps.before_press():
+                                    layer_changed |= self._hold_layer(held)
                                 # Key pressed - check current layer
                                 # Bounds check for layer data (may be reloading after reconnection)
                                 if (self.current_layer < len(self.overlay.all_layers) and
@@ -1633,7 +1708,15 @@ class KeyboardMonitor(threading.Thread):
                                     del self.pressed_keys[(row, col)]
 
                             # Check for layer switching keys
-                            if 0x5220 <= keycode <= 0x523F:  # MO keys
+                            if layer_tap.is_layer_tap(keycode):
+                                if pressed:
+                                    self.layer_taps.press((row, col), keycode, time.time())
+                                else:
+                                    released = self.layer_taps.release((row, col))
+                                    if released is not None:
+                                        layer_changed |= self._release_layer(released)
+
+                            elif 0x5220 <= keycode <= 0x523F:  # MO keys
                                 target_layer = keycode & 0x1F
                                 if pressed:
                                     self.active_layer_stack[target_layer] = "MO"
@@ -1663,6 +1746,9 @@ class KeyboardMonitor(threading.Thread):
                                 else:
                                     self.current_layer = target_layer
                                 layer_changed = True
+
+                for held in self.layer_taps.tick(time.time()):
+                    layer_changed |= self._hold_layer(held)
 
                 if layer_changed:
                     # Send update to GUI (thread-safe)
@@ -1694,6 +1780,22 @@ class KeyboardMonitor(threading.Thread):
             except Exception as e:
                 print(f"Error in keyboard monitor: {e}")
                 time.sleep(1)
+
+    def _hold_layer(self, layer: int) -> bool:
+        """A layer key went down (MO, or a layer-tap that turned into a hold). True if the layer changed."""
+        self.active_layer_stack[layer] = "MO"
+        new_layer = max(self.active_layer_stack)
+        changed = new_layer != self.current_layer
+        self.current_layer = new_layer
+        return changed
+
+    def _release_layer(self, layer: int) -> bool:
+        """A layer key was released. True if the layer changed."""
+        self.active_layer_stack.pop(layer, None)
+        new_layer = max(self.active_layer_stack) if self.active_layer_stack else self.default_layer
+        changed = new_layer != self.current_layer
+        self.current_layer = new_layer
+        return changed
 
     RGB_POLL_INTERVAL = 0.25  # seconds between single-value reads (all four every ~1 s)
     RGB_POLL_BACKOFF = 10.0   # seconds to wait after a failed read (e.g. firmware without RGB matrix)

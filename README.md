@@ -358,6 +358,12 @@ Errors are `{"error": "..."}` with: `501 unsupported` (firmware without the slee
 - **Threading:** HTTP handlers never touch USB; they queue the request for the keyboard monitor thread, which runs it between matrix polls.
 - The firmware side (`users/dontpanic/host_sleep.c`) was not yet flashed when this was written, so the whole path is untested against real hardware.
 
+### Key styles in the overlay
+
+- **Background colour:** modifiers only. Mod-Tap keys and plain modifier combinations are tinted by modifier (Ctrl red, Alt blue, Shift green, Super yellow).
+- **Border colour:** layer keys (`MO`, `LT`, `TG`, `DF`), in the colour of the layer the key leads to (Lower red, Raise blue, Adjust green, ...). `MO` and `LT` have a solid border, `TG` a dotted one and `DF` a dashed one. An `LT(layer, key)` shows the tap key on the first line and the layer name on the second.
+- **Warning keys** (`QK_BOOT`, `QK_REBOOT`, `QK_CLEAR_EEPROM`): a 2 px border in a warning colour (clear EEPROM red, bootloader and reboot amber) plus diagonal stripes in the same colour.
+
 ## Components
 
 ### keyboard_overlay_gui.py
@@ -385,6 +391,12 @@ Local HTTP API and the thread-safe gateway to the USB thread (see [Keyboard slee
 
 ### key_labels.py
 Short overlay labels for `QK_` keycodes (`BOOTLDR`, `REBOOT`, `EE CLR`, `DEBUG`, `MAKE`, `ESC~`) and the warning borders of dangerous keys: clear EEPROM has a red border, bootloader and reboot an orange one.
+
+### layer_tap.py
+Layer tracking for layer-tap keys (`LT(layer, kc)`). The overlay only sees the matrix, so a layer counts as held once the key has been down for the tapping term (220 ms) or as soon as another key is pressed while it is down. A quick tap (which sends the key) never changes the shown layer. Plain `MO(layer)` keys switch immediately as before.
+
+### key_style.py
+Decodes layer-switching keycodes (`MO`, `LT`, `TG`, `DF`) for the key styling above.
 
 ### habit_sounds.py
 Classifies key presses (old pinky key / top row), applies the cooldown and plays the sounds (see [Habit Sounds](#habit-sounds-optional)).
@@ -455,7 +467,7 @@ This sends test layer updates to verify the GNOME Shell extension is working.
 
 ### Testing the RGB effect formatting, key labels and the HTTP API
 ```bash
-python3 -m unittest test_rgb_matrix_info test_key_labels test_keyboard_api test_effect_names test_habit_sounds
+python3 -m unittest test_rgb_matrix_info test_key_labels test_keyboard_api test_effect_names test_habit_sounds test_layer_tap test_key_style
 ```
 
 ## License
