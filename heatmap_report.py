@@ -246,12 +246,12 @@ def main():
     fmt = lambda ms: datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d %H:%M:%S")
     print(f"{total} presses, {fmt(first)} .. {fmt(last)}"
           + (f", layer {layer_label(args.layer)}" if args.layer is not None else ""))
+    print()
+    print(render_top(counts, rows, cols, args.top, total))
     print("\nPresses per key:\n")
     color = sys.stdout.isatty() and not args.no_color
     widths = grid_widths(counts, rows, cols)
     print(render_grid(counts, rows, cols, color, widths, header=True))
-    print()
-    print(render_top(counts, rows, cols, args.top, total))
 
     if args.layer is None and not args.no_layers:
         for layer in sorted(layer_counts):
