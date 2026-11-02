@@ -27,7 +27,7 @@ Collection of tools for QMK keyboards, including a real-time keyboard overlay GU
 - Linux with X11 or Wayland
 - GNOME Shell (optional, for top bar integration)
 - Python 3.7+
-- USB access (requires root or udev rules)
+- USB access (a udev rule, see "USB access without sudo", or root)
 
 ### Dependencies
 
@@ -95,7 +95,39 @@ The `reload_gnome_extension.sh` script will prompt you to do this and wait for y
 
 ## Usage
 
-### Run with sudo (required for USB access)
+### USB access without sudo
+
+The overlay talks to the keyboard over libusb, so it needs write access to the keyboard's USB device node. Install this rule once (adjust the vendor/product IDs to your keyboard; `lsusb` shows them) and replug the keyboard:
+
+```
+# /etc/udev/rules.d/93-sofle-usb.rules
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="fc32", ATTR{idProduct}=="0287", GROUP="plugdev", MODE="0660"
+```
+
+```bash
+sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=fc32
+```
+
+Your user must be in the `plugdev` group. A `TAG+="uaccess"` rule did not grant access to the USB node on the author's machine, hence the group.
+
+### Start automatically at login
+
+`run_overlay.sh` starts the overlay as your user (no sudo, no bridge helper) from the repo directory, where `config.yaml` is looked up, and appends its output to `overlay.log` (git-ignored via `*.log`). Create `~/.config/autostart/qmk-overlay.desktop`:
+
+```
+[Desktop Entry]
+Type=Application
+Name=QMK Overlay
+Exec=/path/to/qmk-tools/run_overlay.sh
+Path=/path/to/qmk-tools
+Terminal=false
+```
+
+To run it by hand with console output: `venv/bin/python keyboard_overlay_gui.py`.
+
+### Run with sudo (alternative)
+
+Without the udev rule the overlay needs root:
 
 ```bash
 ./run_overlay_with_sudo.sh
